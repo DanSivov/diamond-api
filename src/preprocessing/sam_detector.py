@@ -60,16 +60,20 @@ class SAMDiamondDetector:
             import os
             from pathlib import Path
 
-            model_file = Path(__file__).parent.parent.parent / 'FastSAM-x.pt'
+            model_file_x = Path(__file__).parent.parent.parent / 'FastSAM-x.pt'
+            model_file_s = Path(__file__).parent.parent.parent / 'FastSAM-s.pt'
 
-            if model_file.exists():
-                print(f"Loading local FastSAM model from {model_file}")
-                self.model = FastSAM(str(model_file))
+            if model_file_x.exists():
+                print(f"Loading local FastSAM-x model from {model_file_x}")
+                self.model = FastSAM(str(model_file_x))
+            elif model_file_s.exists():
+                print(f"Loading local FastSAM-s model from {model_file_s}")
+                self.model = FastSAM(str(model_file_s))
             else:
-                print("FastSAM-x.pt not found locally, attempting auto-download from ultralytics")
+                print("FastSAM model not found locally, attempting auto-download of FastSAM-s (smaller, memory-efficient)")
                 try:
-                    self.model = FastSAM('FastSAM-x.pt')
-                    print("FastSAM model loaded successfully")
+                    self.model = FastSAM('FastSAM-s.pt')
+                    print("FastSAM-s model loaded successfully")
                 except Exception as e:
                     print(f"Failed to load FastSAM model: {e}")
                     raise

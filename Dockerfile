@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN python -c "from ultralytics import FastSAM; model = FastSAM('FastSAM-x.pt'); print('FastSAM model downloaded successfully')"
+RUN python -c "from ultralytics import FastSAM; model = FastSAM('FastSAM-s.pt'); print('FastSAM-s model downloaded successfully (memory-efficient)')"
 
-CMD gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+CMD gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 1 --max-requests 100 --max-requests-jitter 10

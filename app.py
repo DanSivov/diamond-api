@@ -15,17 +15,26 @@ from core import DiamondClassifier
 app = Flask(__name__)
 CORS(app)
 
-# Initialize classifier
-model_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
-features_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'feature_names.json'
+# Lazy loading to reduce memory footprint
+classifier = None
 
-if not model_path.exists():
-    raise FileNotFoundError(f"Model file not found: {model_path}")
-if not features_path.exists():
-    raise FileNotFoundError(f"Features file not found: {features_path}")
+def get_classifier():
+    """Lazy load classifier only when needed"""
+    global classifier
+    if classifier is None:
+        model_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
+        features_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'feature_names.json'
 
-classifier = DiamondClassifier(str(model_path), str(features_path))
-print(f"API initialized with model at {model_path}")
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        if not features_path.exists():
+            raise FileNotFoundError(f"Features file not found: {features_path}")
+
+        print(f"Loading classifier from {model_path}")
+        classifier = DiamondClassifier(str(model_path), str(features_path))
+        print("Classifier loaded successfully")
+
+    return classifier
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -48,7 +57,8 @@ def classify():
     # Classify
     try:
         print(f"Processing image: {file.filename}, shape: {image.shape}")
-        result = classifier.classify_image(image, file.filename)
+        clf = get_classifier()
+        result = clf.classify_image(image, file.filename)
         print(f"Result: {result.total_diamonds} diamonds found")
 
         # Convert to JSON-serializable format
@@ -87,6 +97,7 @@ def classify_batch():
 
     files = request.files.getlist('images')
     results = []
+    clf = get_classifier()
 
     for file in files:
         file_bytes = np.frombuffer(file.read(), np.uint8)
@@ -96,7 +107,7 @@ def classify_batch():
             continue
 
         try:
-            result = classifier.classify_image(image, file.filename)
+            result = clf.classify_image(image, file.filename)
 
             results.append({
                 'image_name': result.image_name,
