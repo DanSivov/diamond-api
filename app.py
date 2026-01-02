@@ -10,8 +10,6 @@ import sys
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from core import DiamondClassifier
-
 app = Flask(__name__)
 CORS(app)
 
@@ -22,6 +20,9 @@ def get_classifier():
     """Lazy load classifier only when needed"""
     global classifier
     if classifier is None:
+        # Import only when needed to avoid loading all dependencies at startup
+        from core import DiamondClassifier
+
         model_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
         features_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'feature_names.json'
 
