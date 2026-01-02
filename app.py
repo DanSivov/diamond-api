@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'public' / 'src'))
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from core import DiamondClassifier
 
@@ -16,8 +16,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialize classifier
-model_path = Path(__file__).parent.parent / 'public' / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
-features_path = Path(__file__).parent.parent / 'public' / 'models' / 'ml_classifier' / 'feature_names.json'
+model_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
+features_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'feature_names.json'
 
 if not model_path.exists():
     raise FileNotFoundError(f"Model file not found: {model_path}")
