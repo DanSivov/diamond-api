@@ -57,7 +57,22 @@ class SAMDiamondDetector:
     def load_model(self):
         """Load FastSAM model (lazy loading)"""
         if self.model is None:
-            self.model = FastSAM('FastSAM-x.pt')
+            import os
+            from pathlib import Path
+
+            model_file = Path(__file__).parent.parent.parent / 'FastSAM-x.pt'
+
+            if model_file.exists():
+                print(f"Loading local FastSAM model from {model_file}")
+                self.model = FastSAM(str(model_file))
+            else:
+                print("FastSAM-x.pt not found locally, attempting auto-download from ultralytics")
+                try:
+                    self.model = FastSAM('FastSAM-x.pt')
+                    print("FastSAM model loaded successfully")
+                except Exception as e:
+                    print(f"Failed to load FastSAM model: {e}")
+                    raise
 
     def _calculate_iou(self, mask1: np.ndarray, mask2: np.ndarray) -> float:
         """Calculate Intersection over Union between two masks"""

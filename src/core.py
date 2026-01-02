@@ -116,9 +116,12 @@ class DiamondClassifier:
             self._initialize_grader(w)
 
         # Detect diamonds
+        print(f"Detecting diamonds in image of size {h}x{w}")
         diamond_rois = self.detector.detect(image)
+        print(f"Detection complete: found {len(diamond_rois)} diamonds")
 
         if len(diamond_rois) == 0:
+            print("No diamonds detected, returning empty result")
             return ImageResult(
                 image_name=image_name,
                 total_diamonds=0,

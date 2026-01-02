@@ -47,7 +47,9 @@ def classify():
 
     # Classify
     try:
+        print(f"Processing image: {file.filename}, shape: {image.shape}")
         result = classifier.classify_image(image, file.filename)
+        print(f"Result: {result.total_diamonds} diamonds found")
 
         # Convert to JSON-serializable format
         response = {
