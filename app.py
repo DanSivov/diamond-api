@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import tempfile
 import os
+import base64
 from pathlib import Path
 import sys
 
@@ -62,6 +63,19 @@ def classify():
         result = clf.classify_image(image, file.filename)
         print(f"Result: {result.total_diamonds} diamonds found")
 
+        # Get ROI images for visualization
+        roi_images = []
+        if hasattr(clf, '_last_graded_diamonds'):
+            for gd in clf._last_graded_diamonds:
+                roi_img = gd.roi.roi_image
+                _, buffer = cv2.imencode('.png', roi_img)
+                roi_b64 = base64.b64encode(buffer).decode('utf-8')
+                roi_images.append(roi_b64)
+
+        # Encode full image for context view
+        _, full_buffer = cv2.imencode('.png', image)
+        full_image_b64 = base64.b64encode(full_buffer).decode('utf-8')
+
         # Convert to JSON-serializable format
         response = {
             'image_name': result.image_name,
@@ -71,6 +85,7 @@ def classify():
             'pickable_count': result.pickable_count,
             'invalid_count': result.invalid_count,
             'average_grade': result.average_grade,
+            'full_image_base64': full_image_b64,
             'classifications': [
                 {
                     'roi_id': c.roi_id,
@@ -80,9 +95,10 @@ def classify():
                     'features': c.features,
                     'bounding_box': list(c.bounding_box),
                     'center': list(c.center),
-                    'area': c.area
+                    'area': c.area,
+                    'roi_image_base64': roi_images[i] if i < len(roi_images) else None
                 }
-                for c in result.classifications
+                for i, c in enumerate(result.classifications)
             ]
         }
 
@@ -110,6 +126,19 @@ def classify_batch():
         try:
             result = clf.classify_image(image, file.filename)
 
+            # Get ROI images for visualization
+            roi_images = []
+            if hasattr(clf, '_last_graded_diamonds'):
+                for gd in clf._last_graded_diamonds:
+                    roi_img = gd.roi.roi_image
+                    _, buffer = cv2.imencode('.png', roi_img)
+                    roi_b64 = base64.b64encode(buffer).decode('utf-8')
+                    roi_images.append(roi_b64)
+
+            # Encode full image for context view
+            _, full_buffer = cv2.imencode('.png', image)
+            full_image_b64 = base64.b64encode(full_buffer).decode('utf-8')
+
             results.append({
                 'image_name': result.image_name,
                 'total_diamonds': result.total_diamonds,
@@ -118,6 +147,7 @@ def classify_batch():
                 'pickable_count': result.pickable_count,
                 'invalid_count': result.invalid_count,
                 'average_grade': result.average_grade,
+                'full_image_base64': full_image_b64,
                 'classifications': [
                     {
                         'roi_id': c.roi_id,
@@ -127,9 +157,10 @@ def classify_batch():
                         'features': c.features,
                         'bounding_box': list(c.bounding_box),
                         'center': list(c.center),
-                        'area': c.area
+                        'area': c.area,
+                        'roi_image_base64': roi_images[i] if i < len(roi_images) else None
                     }
-                    for c in result.classifications
+                    for i, c in enumerate(result.classifications)
                 ]
             })
         except Exception as e:
