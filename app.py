@@ -76,6 +76,13 @@ def classify():
         _, full_buffer = cv2.imencode('.png', image)
         full_image_b64 = base64.b64encode(full_buffer).decode('utf-8')
 
+        # Get graded visualization image
+        graded_image_b64 = None
+        visualization = clf.get_visualization()
+        if visualization is not None:
+            _, graded_buffer = cv2.imencode('.png', visualization)
+            graded_image_b64 = base64.b64encode(graded_buffer).decode('utf-8')
+
         # Convert to JSON-serializable format
         response = {
             'image_name': result.image_name,
@@ -86,6 +93,7 @@ def classify():
             'invalid_count': result.invalid_count,
             'average_grade': result.average_grade,
             'full_image_base64': full_image_b64,
+            'graded_image_base64': graded_image_b64,
             'classifications': [
                 {
                     'roi_id': c.roi_id,
@@ -139,6 +147,13 @@ def classify_batch():
             _, full_buffer = cv2.imencode('.png', image)
             full_image_b64 = base64.b64encode(full_buffer).decode('utf-8')
 
+            # Get graded visualization image
+            graded_image_b64 = None
+            visualization = clf.get_visualization()
+            if visualization is not None:
+                _, graded_buffer = cv2.imencode('.png', visualization)
+                graded_image_b64 = base64.b64encode(graded_buffer).decode('utf-8')
+
             results.append({
                 'image_name': result.image_name,
                 'total_diamonds': result.total_diamonds,
@@ -148,6 +163,7 @@ def classify_batch():
                 'invalid_count': result.invalid_count,
                 'average_grade': result.average_grade,
                 'full_image_base64': full_image_b64,
+                'graded_image_base64': graded_image_b64,
                 'classifications': [
                     {
                         'roi_id': c.roi_id,
