@@ -51,9 +51,13 @@ def process_batch_job(self, job_id, image_files_data):
         for idx, file_data in enumerate(image_files_data):
             try:
                 filename = file_data['filename']
-                image_bytes = file_data['data']
+                image_data = file_data['data']
 
                 print(f"Processing image {idx + 1}/{len(image_files_data)}: {filename}")
+
+                # Decode base64 to bytes
+                import base64
+                image_bytes = base64.b64decode(image_data)
 
                 # Decode image
                 file_array = np.frombuffer(image_bytes, np.uint8)
