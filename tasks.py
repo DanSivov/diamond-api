@@ -150,12 +150,17 @@ def process_batch_job(self, job_id, image_files_data):
                 traceback.print_exc()
                 # Continue with next image
 
-        # Mark job as complete
-        job.status = 'complete'
-        job.completed_at = datetime.utcnow()
+        # Count total ROIs for this job
+        from sqlalchemy import func
+        total_rois = session.query(func.count(ROI.id)).join(Image).filter(Image.job_id == job_id).scalar()
+        job.total_rois = total_rois or 0
+        job.verified_rois = 0
+
+        # Mark job as ready for verification (not complete yet)
+        job.status = 'ready'
         session.commit()
 
-        print(f"Job {job_id} completed: {job.processed_images}/{job.total_images} images processed")
+        print(f"Job {job_id} processing complete: {job.processed_images}/{job.total_images} images, {total_rois} ROIs ready for verification")
 
         return {
             'job_id': job_id,

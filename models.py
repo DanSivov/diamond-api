@@ -33,9 +33,11 @@ class Job(Base):
     __tablename__ = 'jobs'
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    status = Column(String(20), nullable=False, default='pending')  # pending, processing, complete, failed
+    status = Column(String(20), nullable=False, default='pending')  # pending, processing, in_progress, complete, failed
     total_images = Column(Integer, nullable=False)
     processed_images = Column(Integer, nullable=False, default=0)
+    total_rois = Column(Integer, nullable=False, default=0)
+    verified_rois = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -49,6 +51,8 @@ class Job(Base):
             'status': self.status,
             'total_images': self.total_images,
             'processed_images': self.processed_images,
+            'total_rois': self.total_rois,
+            'verified_rois': self.verified_rois,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'error_message': self.error_message

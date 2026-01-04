@@ -344,17 +344,59 @@ def verify_roi(roi_id):
             session.close()
             return jsonify({'error': 'ROI not found'}), 404
 
-        # Create verification record
-        verification = Verification(
+        # Check if this ROI already has a verification from this user
+        existing = session.query(Verification).filter_by(
             roi_id=roi_id,
-            user_email=data['user_email'],
-            is_correct=data['is_correct'],
-            corrected_type=data.get('corrected_type'),
-            corrected_orientation=data.get('corrected_orientation'),
-            notes=data.get('notes')
-        )
-        session.add(verification)
+            user_email=data['user_email']
+        ).first()
+
+        if existing:
+            # Update existing verification
+            existing.is_correct = data['is_correct']
+            existing.corrected_type = data.get('corrected_type')
+            existing.corrected_orientation = data.get('corrected_orientation')
+            existing.notes = data.get('notes')
+            existing.verified_at = datetime.utcnow()
+            verification = existing
+        else:
+            # Create new verification record
+            verification = Verification(
+                roi_id=roi_id,
+                user_email=data['user_email'],
+                is_correct=data['is_correct'],
+                corrected_type=data.get('corrected_type'),
+                corrected_orientation=data.get('corrected_orientation'),
+                notes=data.get('notes')
+            )
+            session.add(verification)
+
         session.commit()
+
+        # Update job progress
+        # Get the job for this ROI
+        image = session.query(Image).filter_by(id=roi.image_id).first()
+        if image:
+            job = session.query(Job).filter_by(id=image.job_id).first()
+            if job:
+                # Count verified ROIs for this job
+                from sqlalchemy import func, distinct
+                verified_count = session.query(func.count(distinct(Verification.roi_id)))\
+                    .join(ROI, Verification.roi_id == ROI.id)\
+                    .join(Image, ROI.image_id == Image.id)\
+                    .filter(Image.job_id == job.id)\
+                    .scalar()
+
+                job.verified_rois = verified_count or 0
+
+                # Update job status
+                if job.status == 'ready' and verified_count > 0:
+                    job.status = 'in_progress'
+                elif verified_count >= job.total_rois:
+                    job.status = 'complete'
+                    job.completed_at = datetime.utcnow()
+
+                session.commit()
+                print(f"Job {job.id} progress: {job.verified_rois}/{job.total_rois} ROIs verified, status: {job.status}")
 
         response = verification.to_dict()
         session.close()
