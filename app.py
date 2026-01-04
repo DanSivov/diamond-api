@@ -451,5 +451,45 @@ def list_jobs():
         print(f"Error listing jobs: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/jobs/<job_id>', methods=['DELETE'])
+def delete_job(job_id):
+    """Delete a job and all associated data"""
+    try:
+        session = get_session()
+        job = session.query(Job).filter_by(id=job_id).first()
+
+        if not job:
+            session.close()
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Get all images for this job
+        images = session.query(Image).filter_by(job_id=job_id).all()
+
+        # Delete all ROIs and verifications for each image
+        for image in images:
+            rois = session.query(ROI).filter_by(image_id=image.id).all()
+            for roi in rois:
+                # Delete verifications for this ROI
+                session.query(Verification).filter_by(roi_id=roi.id).delete()
+                # Delete the ROI
+                session.delete(roi)
+            # Delete the image
+            session.delete(image)
+
+        # Delete the job
+        session.delete(job)
+        session.commit()
+        session.close()
+
+        print(f"Deleted job {job_id}")
+
+        return jsonify({'success': True, 'message': 'Job deleted successfully'})
+
+    except Exception as e:
+        print(f"Error deleting job: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
