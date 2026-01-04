@@ -15,11 +15,12 @@ class R2Storage:
         self.access_key_id = os.environ.get('R2_ACCESS_KEY_ID')
         self.secret_access_key = os.environ.get('R2_SECRET_ACCESS_KEY')
         self.bucket_name = os.environ.get('R2_BUCKET_NAME')
+        self.public_url = os.environ.get('R2_PUBLIC_URL')  # Public R2.dev URL
 
         if not all([self.account_id, self.access_key_id, self.secret_access_key, self.bucket_name]):
             raise ValueError("Missing R2 configuration. Check environment variables.")
 
-        # R2 endpoint
+        # R2 endpoint for API access
         self.endpoint_url = f"https://{self.account_id}.r2.cloudflarestorage.com"
 
         # Initialize S3 client for R2
@@ -49,12 +50,16 @@ class R2Storage:
                 Bucket=self.bucket_name,
                 Key=filename,
                 Body=image_bytes,
-                ContentType=content_type,
-                ACL='public-read'  # Make publicly accessible
+                ContentType=content_type
             )
 
-            # Return public URL
-            public_url = f"{self.endpoint_url}/{self.bucket_name}/{filename}"
+            # Return public URL (use R2.dev public URL if available, otherwise fall back)
+            if self.public_url:
+                public_url = f"{self.public_url}/{filename}"
+            else:
+                # Fallback to direct URL (won't work in browser without CORS)
+                public_url = f"{self.endpoint_url}/{self.bucket_name}/{filename}"
+
             return public_url
 
         except Exception as e:
