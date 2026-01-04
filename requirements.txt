@@ -10,6 +10,7 @@ scipy>=1.7.0
 torch==2.2.0+cpu
 torchvision==0.17.0+cpu
 ultralytics>=8.0.0
+segment-anything>=1.0
 
 # Database
 sqlalchemy>=2.0.0
