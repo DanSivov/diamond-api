@@ -167,10 +167,50 @@ class Verification(Base):
         }
 
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables and run migrations"""
+    from sqlalchemy import text
+
     engine = get_db_engine()
     Base.metadata.create_all(engine)
     print("Database tables created successfully")
+
+    # Run migration: Add user_email column for user isolation
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                # Check if user_email column exists
+                result = conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name='jobs' AND column_name='user_email'
+                """))
+
+                if result.fetchone() is None:
+                    print("Running migration: Adding user_email column to jobs table...")
+
+                    # Add user_email column
+                    conn.execute(text("""
+                        ALTER TABLE jobs
+                        ADD COLUMN user_email VARCHAR(255)
+                    """))
+
+                    # Add index for performance
+                    conn.execute(text("""
+                        CREATE INDEX idx_jobs_user_email
+                        ON jobs (user_email)
+                    """))
+
+                    print("✓ Migration completed: user_email column added")
+                else:
+                    print("✓ user_email column already exists")
+
+                trans.commit()
+            except Exception as e:
+                trans.rollback()
+                print(f"Migration warning (may be safe to ignore if column exists): {e}")
+    except Exception as e:
+        print(f"Migration check failed: {e}")
 
 if __name__ == '__main__':
     init_db()
