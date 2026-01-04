@@ -502,6 +502,8 @@ def list_jobs():
 
     except Exception as e:
         print(f"Error listing jobs: {e}")
+        import traceback
+        traceback.print_exc()  # Print full stack trace to logs
         return jsonify({'error': str(e)}), 500
 
 @app.route('/jobs/<job_id>', methods=['DELETE'])
