@@ -33,6 +33,7 @@ class Job(Base):
     __tablename__ = 'jobs'
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_email = Column(String(255), nullable=True, index=True)  # Nullable for backwards compatibility
     status = Column(String(20), nullable=False, default='pending')  # pending, processing, in_progress, ready, complete, failed
     total_images = Column(Integer, nullable=False)
     processed_images = Column(Integer, nullable=False, default=0)
@@ -48,6 +49,7 @@ class Job(Base):
     def to_dict(self):
         return {
             'id': self.id,
+            'user_email': getattr(self, 'user_email', None),  # Default to None if column doesn't exist
             'status': self.status,
             'total_images': self.total_images,
             'processed_images': self.processed_images,

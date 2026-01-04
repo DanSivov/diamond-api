@@ -225,10 +225,13 @@ def create_job():
         if not files_data or len(files_data) == 0:
             return jsonify({'error': 'Empty file list'}), 400
 
+        user_email = data.get('user_email')  # Get user email from request
+
         session = get_session()
 
         # Create job record
         job = Job(
+            user_email=user_email,
             total_images=len(files_data),
             processed_images=0,
             status='pending'
@@ -480,10 +483,18 @@ def export_job_labels(job_id):
 
 @app.route('/jobs', methods=['GET'])
 def list_jobs():
-    """List all jobs"""
+    """List jobs for a specific user"""
     try:
+        user_email = request.args.get('user_email')
+
         session = get_session()
-        jobs = session.query(Job).order_by(Job.created_at.desc()).limit(50).all()
+
+        # Filter by user_email if provided, otherwise return all (for backwards compatibility)
+        query = session.query(Job).order_by(Job.created_at.desc()).limit(50)
+        if user_email:
+            query = query.filter(Job.user_email == user_email)
+
+        jobs = query.all()
         response = [job.to_dict() for job in jobs]
         session.close()
 
