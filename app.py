@@ -152,26 +152,8 @@ def classify_batch():
 
             result = clf.classify_image(image, file.filename)
 
-            # Get ROI images for visualization
-            roi_images = []
-            if hasattr(clf, '_last_graded_diamonds'):
-                for gd in clf._last_graded_diamonds:
-                    roi_img = gd.roi.roi_image
-                    _, buffer = cv2.imencode('.png', roi_img)
-                    roi_b64 = base64.b64encode(buffer).decode('utf-8')
-                    roi_images.append(roi_b64)
-
-            # Encode full image for context view
-            _, full_buffer = cv2.imencode('.png', image)
-            full_image_b64 = base64.b64encode(full_buffer).decode('utf-8')
-
-            # Get graded visualization image
-            graded_image_b64 = None
-            visualization = clf.get_visualization()
-            if visualization is not None:
-                _, graded_buffer = cv2.imencode('.png', visualization)
-                graded_image_b64 = base64.b64encode(graded_buffer).decode('utf-8')
-
+            # For batch processing, skip heavy image encoding to reduce response size
+            # Only include classification data, not images
             results.append({
                 'image_name': result.image_name,
                 'total_diamonds': result.total_diamonds,
@@ -180,8 +162,6 @@ def classify_batch():
                 'pickable_count': result.pickable_count,
                 'invalid_count': result.invalid_count,
                 'average_grade': result.average_grade,
-                'full_image_base64': full_image_b64,
-                'graded_image_base64': graded_image_b64,
                 'classifications': [
                     {
                         'roi_id': c.roi_id,
@@ -191,18 +171,14 @@ def classify_batch():
                         'features': c.features,
                         'bounding_box': list(c.bounding_box),
                         'center': list(c.center),
-                        'area': c.area,
-                        'roi_image_base64': roi_images[i] if i < len(roi_images) else None
+                        'area': c.area
                     }
-                    for i, c in enumerate(result.classifications)
+                    for c in result.classifications
                 ]
             })
 
             # Clear memory after each image
-            del image, file_bytes, full_buffer
-            if visualization is not None:
-                del visualization, graded_buffer
-            del roi_images
+            del image, file_bytes
             gc.collect()
 
             print(f"Successfully processed {file.filename}: {result.total_diamonds} diamonds found")
