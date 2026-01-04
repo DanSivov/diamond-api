@@ -7,6 +7,10 @@ import os
 # Get Redis URL from environment
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
+# Debug: Print what we're using (will show in Railway logs)
+print(f"[CELERY CONFIG] Using Redis URL: {redis_url[:20]}..." if len(redis_url) > 20 else f"[CELERY CONFIG] Using Redis URL: {redis_url}")
+print(f"[CELERY CONFIG] REDIS_URL env var is: {'SET' if 'REDIS_URL' in os.environ else 'NOT SET'}")
+
 # Create Celery app
 celery_app = Celery(
     'diamond_classifier',
