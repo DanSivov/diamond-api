@@ -34,7 +34,7 @@ def migrate():
             print("Adding total_rois column...")
             conn.execute(text("""
                 ALTER TABLE jobs
-                ADD COLUMN total_rois INTEGER NOT NULL DEFAULT 0
+                ADD COLUMN total_rois INTEGER DEFAULT 0
             """))
             conn.commit()
             print("✓ Added total_rois column")
@@ -46,7 +46,7 @@ def migrate():
             print("Adding verified_rois column...")
             conn.execute(text("""
                 ALTER TABLE jobs
-                ADD COLUMN verified_rois INTEGER NOT NULL DEFAULT 0
+                ADD COLUMN verified_rois INTEGER DEFAULT 0
             """))
             conn.commit()
             print("✓ Added verified_rois column")
