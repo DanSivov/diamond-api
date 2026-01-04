@@ -489,10 +489,15 @@ def list_jobs():
 
         session = get_session()
 
-        # Filter by user_email if provided, otherwise return all (for backwards compatibility)
-        query = session.query(Job).order_by(Job.created_at.desc()).limit(50)
+        # Build query - filter must come BEFORE limit
+        query = session.query(Job)
+
+        # Filter by user_email if provided
         if user_email:
             query = query.filter(Job.user_email == user_email)
+
+        # Apply ordering and limit
+        query = query.order_by(Job.created_at.desc()).limit(50)
 
         jobs = query.all()
         response = [job.to_dict() for job in jobs]
