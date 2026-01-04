@@ -103,7 +103,18 @@ def process_batch_job(self, job_id, image_files_data):
                     roi_url = None
                     if hasattr(classifier, '_last_graded_diamonds') and roi_idx < len(classifier._last_graded_diamonds):
                         gd = classifier._last_graded_diamonds[roi_idx]
-                        roi_img = gd.roi.roi_image
+                        roi_img = gd.roi.roi_image.copy()  # Copy to avoid modifying original
+
+                        # Draw diamond outline on ROI image for visual reference
+                        if hasattr(gd.roi, 'contour') and gd.roi.contour is not None:
+                            # Adjust contour coordinates to ROI local space
+                            x, y, w, h = gd.roi.bounding_box
+                            padding = 10  # Same padding used in detector
+                            contour_local = gd.roi.contour - np.array([x - padding, y - padding])
+
+                            # Draw green outline (2px thick)
+                            cv2.drawContours(roi_img, [contour_local], -1, (0, 255, 0), 2)
+
                         roi_filename = f"jobs/{job_id}/rois/{image_record.id}_{roi_idx}.png"
                         roi_url = storage.upload_numpy_image(roi_img, roi_filename)
 
