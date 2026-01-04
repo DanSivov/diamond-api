@@ -7,6 +7,7 @@ import os
 import base64
 from pathlib import Path
 import sys
+import gc
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -110,9 +111,19 @@ def classify():
             ]
         }
 
+        # Clear memory
+        del image, file_bytes, full_buffer, roi_images
+        if visualization is not None:
+            del visualization, graded_buffer
+        gc.collect()
+
         return jsonify(response)
 
     except Exception as e:
+        print(f"Error processing image: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        gc.collect()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/classify-batch', methods=['POST'])
@@ -124,14 +135,21 @@ def classify_batch():
     results = []
     clf = get_classifier()
 
-    for file in files:
-        file_bytes = np.frombuffer(file.read(), np.uint8)
-        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-        if image is None:
-            continue
+    for idx, file in enumerate(files):
+        print(f"Processing image {idx + 1}/{len(files)}: {file.filename}")
 
         try:
+            file_bytes = np.frombuffer(file.read(), np.uint8)
+            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+            if image is None:
+                print(f"Failed to decode image: {file.filename}")
+                results.append({
+                    'image_name': file.filename,
+                    'error': 'Failed to decode image'
+                })
+                continue
+
             result = clf.classify_image(image, file.filename)
 
             # Get ROI images for visualization
@@ -179,12 +197,28 @@ def classify_batch():
                     for i, c in enumerate(result.classifications)
                 ]
             })
+
+            # Clear memory after each image
+            del image, file_bytes, full_buffer
+            if visualization is not None:
+                del visualization, graded_buffer
+            del roi_images
+            gc.collect()
+
+            print(f"Successfully processed {file.filename}: {result.total_diamonds} diamonds found")
+
         except Exception as e:
+            print(f"Error processing {file.filename}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             results.append({
                 'image_name': file.filename,
                 'error': str(e)
             })
+            # Clear memory on error too
+            gc.collect()
 
+    print(f"Batch processing complete: {len(results)} results")
     return jsonify({'results': results})
 
 if __name__ == '__main__':
