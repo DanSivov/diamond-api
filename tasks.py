@@ -162,14 +162,26 @@ def process_batch_job(self, job_id, image_files_data):
                 # Continue with next image
 
         # Count total ROIs for this job
+        print(f"Counting total ROIs for job {job_id}...")
+        import time
+        start_time = time.time()
+
         from sqlalchemy import func
         total_rois = session.query(func.count(ROI.id)).join(Image).filter(Image.job_id == job_id).scalar()
+
+        count_time = time.time() - start_time
+        print(f"ROI count query took {count_time:.2f} seconds, found {total_rois} ROIs")
+
         job.total_rois = total_rois or 0
         job.verified_rois = 0
 
         # Mark job as ready for verification (not complete yet)
+        print(f"Setting job status to 'ready' and committing to database...")
+        start_commit = time.time()
         job.status = 'ready'
         session.commit()
+        commit_time = time.time() - start_commit
+        print(f"Database commit took {commit_time:.2f} seconds")
 
         print(f"Job {job_id} processing complete: {job.processed_images}/{job.total_images} images, {total_rois} ROIs ready for verification")
 

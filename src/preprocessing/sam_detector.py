@@ -43,7 +43,7 @@ class SAMDiamondDetector:
                  padding: int = 10,
                  merge_overlapping: bool = False,
                  overlap_threshold: float = 0.25,
-                 use_full_sam: bool = True):
+                 use_full_sam: bool = False):
         """
         Initialize SAM diamond detector
 
