@@ -175,8 +175,10 @@ class PickupGrader:
                 # Use the smaller threshold between target and neighbor
                 required_threshold = min(target_threshold, other_threshold)
 
-        return (min_edge_distance if min_edge_distance != float('inf') else 0.0,
-                required_threshold)
+        # If no neighbors found, return very large distance (diamond is completely isolated)
+        if min_edge_distance == float('inf'):
+            return (float('inf'), required_threshold)
+        return (min_edge_distance, required_threshold)
 
     def _find_nearest_neighbor_distance(self, target_roi, all_rois: List) -> float:
         """
