@@ -299,7 +299,21 @@ class SAMDiamondDetector:
                 return diamond_rois
 
             masks = results[0].masks.data.cpu().numpy()
+
+            # Upscale masks back to original size if we downscaled
+            if scale_factor != 1.0:
+                upscaled_masks = []
+                original_h, original_w = original_image.shape[:2]
+                for mask in masks:
+                    mask_uint8 = (mask > 0.5).astype(np.uint8) * 255
+                    mask_upscaled = cv2.resize(mask_uint8, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
+                    upscaled_masks.append(mask_upscaled.astype(np.float32) / 255.0)
+                masks = upscaled_masks
+
             masks = self._merge_masks(list(masks))
+
+            # Use original image for ROI extraction
+            image = original_image
 
         # Process masks (same for both SAM and FastSAM)
         roi_id = 0
