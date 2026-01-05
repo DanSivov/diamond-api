@@ -145,25 +145,26 @@ class DiamondClassifier:
             # AUTO-DETECT diamond type (no user input required)
             diamond_type = roi.detected_type  # 'round' or 'other'
 
-            # For ROUND diamonds, use simple brightness-based classification
-            # Round brilliant cuts have distinct brightness patterns
+            # For ROUND diamonds, use geometric features
+            # Round brilliant cuts have distinct patterns
             if diamond_type == 'round':
-                # Round diamonds on table: High central brightness + uniform distribution
-                # Round diamonds tilted: Lower central brightness + directional gradient
+                # Round diamonds on table: Large central bright spot + high symmetry
+                # Round diamonds tilted: No central spot OR low symmetry
 
-                # Use central brightness and uniformity as primary indicators
-                central_brightness = result.table_brightness
-                uniformity = result.brightness_uniformity
+                # Use available geometric features
+                has_bright_center = result.has_large_central_spot and result.spot_is_light
+                high_symmetry = result.outline_symmetry_score > 0.65 or result.reflection_symmetry_score > 0.65
 
-                # Simple threshold-based classification for round diamonds
-                # TABLE: High central brightness (>0.6) OR high uniformity (>0.65)
-                # TILTED: Low central brightness AND low uniformity
-                if central_brightness > 0.6 or uniformity > 0.65:
+                # Simple classification for round diamonds
+                # TABLE: Has bright center OR high symmetry
+                # TILTED: No bright center AND low symmetry
+                if has_bright_center or high_symmetry:
                     orientation = 'table'
-                    confidence = max(central_brightness, uniformity)
+                    # Use max of symmetry scores as confidence
+                    confidence = max(result.outline_symmetry_score, result.reflection_symmetry_score)
                 else:
                     orientation = 'tilted'
-                    confidence = 1.0 - max(central_brightness, uniformity)
+                    confidence = 1.0 - max(result.outline_symmetry_score, result.reflection_symmetry_score)
 
             else:
                 # For NON-ROUND diamonds, use ML model trained on rectangular diamonds
