@@ -11,8 +11,13 @@ try:
     SAM_AVAILABLE = True
 except ImportError:
     SAM_AVAILABLE = False
-    # Fallback to FastSAM if SAM not available
+
+# Always import FastSAM since it's the default
+try:
     from ultralytics import FastSAM
+    FASTSAM_AVAILABLE = True
+except ImportError:
+    FASTSAM_AVAILABLE = False
 
 
 @dataclass
