@@ -73,25 +73,25 @@ class SAMDiamondDetector:
         import os
 
         if self.use_full_sam:
-            # Try to load full SAM model (ViT-H for best accuracy)
-            model_path = Path(__file__).parent.parent.parent / 'sam_vit_h_4b8939.pth'
+            # Try to load SAM ViT-L model (good balance of speed and accuracy)
+            model_path = Path(__file__).parent.parent.parent / 'sam_vit_l_0b3195.pth'
 
             if not model_path.exists():
                 # Try to download
-                print("SAM ViT-H model not found, downloading...")
+                print("SAM ViT-L model not found, downloading...")
                 import urllib.request
-                url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+                url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth"
                 try:
                     urllib.request.urlretrieve(url, str(model_path))
-                    print(f"Downloaded SAM ViT-H model to {model_path}")
+                    print(f"Downloaded SAM ViT-L model to {model_path}")
                 except Exception as e:
                     print(f"Failed to download SAM model: {e}")
                     print("Falling back to FastSAM...")
                     self.use_full_sam = False
 
             if self.use_full_sam:
-                print(f"Loading SAM ViT-H model from {model_path}")
-                sam = sam_model_registry["vit_h"](checkpoint=str(model_path))
+                print(f"Loading SAM ViT-L model from {model_path}")
+                sam = sam_model_registry["vit_l"](checkpoint=str(model_path))
 
                 # Set device (use CPU if CUDA not available)
                 import torch
@@ -99,13 +99,13 @@ class SAMDiamondDetector:
                 sam.to(device=device)
                 print(f"SAM model loaded on {device}")
 
-                # Create mask generator with optimized settings for diamonds
+                # Create mask generator with optimized settings for speed
                 self.mask_generator = SamAutomaticMaskGenerator(
                     model=sam,
-                    points_per_side=32,  # Higher = more masks, slower
-                    pred_iou_thresh=0.86,  # Quality threshold
-                    stability_score_thresh=0.92,  # Stability threshold
-                    crop_n_layers=1,  # Number of crop layers
+                    points_per_side=24,  # Reduced from 32 for speed
+                    pred_iou_thresh=0.85,  # Slightly lower for speed
+                    stability_score_thresh=0.90,  # Slightly lower for speed
+                    crop_n_layers=0,  # Disabled cropping for speed
                     crop_n_points_downscale_factor=2,
                     min_mask_region_area=self.min_area,  # Filter small masks
                 )
@@ -240,6 +240,18 @@ class SAMDiamondDetector:
         self.load_model()
 
         diamond_rois = []
+        original_image = image
+        scale_factor = 1.0
+
+        # Downscale large images for faster processing
+        max_dimension = 1536  # Max width or height
+        h, w = image.shape[:2]
+        if max(h, w) > max_dimension:
+            scale_factor = max_dimension / max(h, w)
+            new_w = int(w * scale_factor)
+            new_h = int(h * scale_factor)
+            image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            print(f"Downscaled image from {w}x{h} to {new_w}x{new_h} for faster processing")
 
         if self.mask_generator is not None:
             # Full SAM model
@@ -252,10 +264,19 @@ class SAMDiamondDetector:
             for mask_data in sam_masks:
                 # SAM returns masks as dict with 'segmentation', 'area', 'bbox', etc.
                 mask = mask_data['segmentation'].astype(np.uint8) * 255
+
+                # Upscale mask back to original size if we downscaled
+                if scale_factor != 1.0:
+                    original_h, original_w = original_image.shape[:2]
+                    mask = cv2.resize(mask, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
+
                 masks.append(mask)
 
             if self.merge_overlapping:
                 masks = self._merge_masks(masks)
+
+            # Use original image for ROI extraction
+            image = original_image
 
         else:
             # FastSAM model
