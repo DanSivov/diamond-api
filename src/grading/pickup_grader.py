@@ -116,28 +116,15 @@ class PickupGrader:
         """
         Get safety threshold for a diamond based on plate width and min distance
 
-        If mm-to-pixel conversion is available (image_width_px provided):
-            - Use fixed min_distance_mm threshold (default 2mm)
-        Otherwise (fallback):
-            - For circular diamonds: threshold = radius
-            - For non-circular diamonds: threshold = radius/3
+        Always uses fixed min_distance_mm threshold (default 2mm) converted to pixels.
+        This is the same for ALL diamond types (round, emerald, other).
         """
-        # If we have mm-to-pixel conversion, use fixed threshold
+        # Always use fixed threshold - no fallback to radius-based logic
         if self.min_distance_px is not None:
             return self.min_distance_px
 
-        # Fallback to radius-based thresholds
-        radius = np.sqrt(roi.area / np.pi)
-
-        # Check if this is a circular diamond based on detected type
-        is_circular = False
-        if hasattr(roi, 'detected_type') and hasattr(roi, 'orientation'):
-            is_circular = (roi.detected_type == 'round' and roi.orientation == 'table')
-
-        if is_circular:
-            return radius  # Use full radius for circular diamonds
-        else:
-            return radius / 3  # Use diameter/6 = radius/3 for non-circular diamonds
+        # If no image width provided, raise an error
+        raise ValueError("image_width_px is required for grading. Cannot calculate safety threshold without it.")
 
     def _find_nearest_edge_distance(self, target_roi, all_rois: List) -> Tuple[float, float]:
         """
