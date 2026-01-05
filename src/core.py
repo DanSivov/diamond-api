@@ -143,27 +143,49 @@ class DiamondClassifier:
             result = self.feature_extractor.analyze(roi.contour, roi.mask, roi.roi_image)
 
             # AUTO-DETECT diamond type (no user input required)
-            diamond_type = roi.detected_type  # 'round', 'emerald', or 'other'
+            diamond_type = roi.detected_type  # 'round' or 'other'
 
-            # Prepare features for ML model
-            features = [
-                result.outline_symmetry_score,
-                result.reflection_symmetry_score,
-                result.aspect_ratio,
-                result.spot_symmetry_score,
-                1 if result.has_large_central_spot else 0,
-                result.num_reflection_spots,
-                1 if diamond_type == 'emerald' else 0,
-                1 if diamond_type == 'other' else 0
-            ]
+            # For ROUND diamonds, use simple brightness-based classification
+            # Round brilliant cuts have distinct brightness patterns
+            if diamond_type == 'round':
+                # Round diamonds on table: High central brightness + uniform distribution
+                # Round diamonds tilted: Lower central brightness + directional gradient
 
-            # Predict orientation
-            X = np.array([features])
-            prediction = self.model.predict(X)[0]
-            probability = self.model.predict_proba(X)[0]
+                # Use central brightness and uniformity as primary indicators
+                central_brightness = result.table_brightness
+                uniformity = result.brightness_uniformity
 
-            orientation = 'table' if prediction == 1 else 'tilted'
-            confidence = probability[prediction]
+                # Simple threshold-based classification for round diamonds
+                # TABLE: High central brightness (>0.6) OR high uniformity (>0.65)
+                # TILTED: Low central brightness AND low uniformity
+                if central_brightness > 0.6 or uniformity > 0.65:
+                    orientation = 'table'
+                    confidence = max(central_brightness, uniformity)
+                else:
+                    orientation = 'tilted'
+                    confidence = 1.0 - max(central_brightness, uniformity)
+
+            else:
+                # For NON-ROUND diamonds, use ML model trained on rectangular diamonds
+                # Prepare features for ML model
+                features = [
+                    result.outline_symmetry_score,
+                    result.reflection_symmetry_score,
+                    result.aspect_ratio,
+                    result.spot_symmetry_score,
+                    1 if result.has_large_central_spot else 0,
+                    result.num_reflection_spots,
+                    0,  # is_emerald (removed)
+                    1   # is_other
+                ]
+
+                # Predict orientation
+                X = np.array([features])
+                prediction = self.model.predict(X)[0]
+                probability = self.model.predict_proba(X)[0]
+
+                orientation = 'table' if prediction == 1 else 'tilted'
+                confidence = probability[prediction]
 
             # Update ROI with classification
             roi.orientation = orientation

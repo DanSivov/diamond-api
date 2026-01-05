@@ -48,7 +48,9 @@ class SAMDiamondDetector:
                  padding: int = 10,
                  merge_overlapping: bool = False,
                  overlap_threshold: float = 0.25,
-                 use_full_sam: bool = False):
+                 use_full_sam: bool = False,
+                 plate_width_mm: float = 100.0,
+                 min_diamond_size_mm: float = 0.5):
         """
         Initialize SAM diamond detector
 
@@ -59,6 +61,8 @@ class SAMDiamondDetector:
             merge_overlapping: If True, merge overlapping/nested masks
             overlap_threshold: IoU threshold for merging masks
             use_full_sam: If True, use full SAM model (ViT-H), else use FastSAM
+            plate_width_mm: Width of plate in millimeters (default: 100mm)
+            min_diamond_size_mm: Minimum diamond width/height in mm (default: 0.5mm)
         """
         self.min_area = min_area
         self.max_area = max_area
@@ -66,6 +70,8 @@ class SAMDiamondDetector:
         self.merge_overlapping = merge_overlapping
         self.overlap_threshold = overlap_threshold
         self.use_full_sam = use_full_sam and SAM_AVAILABLE
+        self.plate_width_mm = plate_width_mm
+        self.min_diamond_size_mm = min_diamond_size_mm
         self.model = None
         self.mask_generator = None
 
@@ -357,14 +363,22 @@ class SAMDiamondDetector:
             aspect_ratio = minor_axis / major_axis if major_axis > 0 else 0
 
             # Detect diamond type based on aspect ratio
+            # Only distinguish between round (circular) and other (non-circular)
             if aspect_ratio > 0.85:
                 detected_type = 'round'
-            elif aspect_ratio < 0.70:
-                detected_type = 'emerald'
             else:
                 detected_type = 'other'
 
             x, y, w, h = cv2.boundingRect(contour)
+
+            # Filter out unrealistically small diamonds based on real-world size
+            # Calculate minimum pixel size from mm (plate_width_mm matches image width)
+            image_width = image.shape[1]
+            px_per_mm = image_width / self.plate_width_mm
+            min_size_px = self.min_diamond_size_mm * px_per_mm
+
+            if w < min_size_px or h < min_size_px:
+                continue  # Skip diamonds smaller than minimum real-world size
             x_pad = max(0, x - self.padding)
             y_pad = max(0, y - self.padding)
             x_end = min(image.shape[1], x + w + self.padding)
