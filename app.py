@@ -878,6 +878,200 @@ def get_admin_activity():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/admin/storage', methods=['GET'])
+def get_admin_storage():
+    """Get R2 storage information including orphaned files (admin only)"""
+    try:
+        requester_email = request.args.get('requester_email')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        from storage import get_storage
+        storage = get_storage()
+
+        # Get all files from R2
+        all_files = storage.list_files(prefix='jobs/')
+
+        # Get all job IDs from database
+        session = get_session()
+        db_job_ids = set(str(job.id) for job in session.query(Job.id).all())
+        session.close()
+
+        # Group files by job ID and identify orphaned ones
+        jobs_storage = {}
+        total_files = 0
+        orphaned_files = 0
+
+        for file_key in all_files:
+            total_files += 1
+            # Extract job ID from path: jobs/{job_id}/...
+            parts = file_key.split('/')
+            if len(parts) >= 2:
+                job_id = parts[1]
+                if job_id not in jobs_storage:
+                    jobs_storage[job_id] = {
+                        'job_id': job_id,
+                        'files': [],
+                        'file_count': 0,
+                        'is_orphaned': job_id not in db_job_ids
+                    }
+                jobs_storage[job_id]['files'].append(file_key)
+                jobs_storage[job_id]['file_count'] += 1
+
+                if job_id not in db_job_ids:
+                    orphaned_files += 1
+
+        # Convert to list and sort
+        storage_list = list(jobs_storage.values())
+        storage_list.sort(key=lambda x: (not x['is_orphaned'], x['job_id']))
+
+        return jsonify({
+            'total_files': total_files,
+            'orphaned_files': orphaned_files,
+            'total_jobs_in_storage': len(jobs_storage),
+            'orphaned_jobs': sum(1 for j in storage_list if j['is_orphaned']),
+            'jobs': storage_list
+        })
+
+    except Exception as e:
+        print(f"Error getting admin storage: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/storage/orphaned', methods=['DELETE'])
+def delete_orphaned_storage():
+    """Delete all orphaned R2 files (files for jobs not in database) - admin only"""
+    try:
+        requester_email = request.args.get('requester_email')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        from storage import get_storage
+        storage = get_storage()
+
+        # Get all files from R2
+        all_files = storage.list_files(prefix='jobs/')
+
+        # Get all job IDs from database
+        session = get_session()
+        db_job_ids = set(str(job.id) for job in session.query(Job.id).all())
+        session.close()
+
+        # Find and delete orphaned files
+        deleted_count = 0
+        failed_count = 0
+
+        for file_key in all_files:
+            parts = file_key.split('/')
+            if len(parts) >= 2:
+                job_id = parts[1]
+                if job_id not in db_job_ids:
+                    if storage.delete_image(file_key):
+                        deleted_count += 1
+                    else:
+                        failed_count += 1
+
+        print(f"Deleted {deleted_count} orphaned files (failed: {failed_count})")
+
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'failed_count': failed_count
+        })
+
+    except Exception as e:
+        print(f"Error deleting orphaned storage: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/storage/all', methods=['DELETE'])
+def delete_all_storage():
+    """Delete ALL R2 storage files - admin only (nuclear option)"""
+    try:
+        requester_email = request.args.get('requester_email')
+        confirm = request.args.get('confirm')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        if confirm != 'DELETE_ALL':
+            return jsonify({'error': 'Confirmation required. Pass confirm=DELETE_ALL'}), 400
+
+        from storage import get_storage
+        storage = get_storage()
+
+        # Get all files from R2
+        all_files = storage.list_files(prefix='jobs/')
+
+        # Delete all files
+        deleted_count = 0
+        failed_count = 0
+
+        for file_key in all_files:
+            if storage.delete_image(file_key):
+                deleted_count += 1
+            else:
+                failed_count += 1
+
+        print(f"CLEARED ALL STORAGE: Deleted {deleted_count} files (failed: {failed_count})")
+
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'failed_count': failed_count
+        })
+
+    except Exception as e:
+        print(f"Error clearing all storage: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/storage/job/<job_id>', methods=['DELETE'])
+def delete_job_storage(job_id):
+    """Delete all R2 files for a specific job - admin only"""
+    try:
+        requester_email = request.args.get('requester_email')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        from storage import get_storage
+        storage = get_storage()
+
+        # Get all files for this job
+        prefix = f"jobs/{job_id}/"
+        files = storage.list_files(prefix=prefix)
+
+        # Delete all files
+        deleted_count = 0
+        failed_count = 0
+
+        for file_key in files:
+            if storage.delete_image(file_key):
+                deleted_count += 1
+            else:
+                failed_count += 1
+
+        print(f"Deleted {deleted_count} files for job {job_id} (failed: {failed_count})")
+
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'deleted_count': deleted_count,
+            'failed_count': failed_count
+        })
+
+    except Exception as e:
+        print(f"Error deleting job storage: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/jobs/<job_id>', methods=['DELETE'])
 def delete_job(job_id):
     """Delete a job and all associated data including R2 files"""
