@@ -594,11 +594,17 @@ def regenerate_graded_image(image_id):
 
         print(f"Generated corrected visualization for image {image_id}")
 
+        # Count how many corrections were applied
+        corrections_count = 0
+        for i, rd in enumerate(roi_data):
+            if i < len(rois) and rd['final_orientation'] != rois[i].predicted_orientation:
+                corrections_count += 1
+
         return jsonify({
             'image_id': image_id,
             'corrected_graded_base64': corrected_b64,
             'roi_count': len(roi_data),
-            'corrections_applied': sum(1 for rd in roi_data if rd['final_orientation'] != rois[roi_data.index(rd)].predicted_orientation if roi_data.index(rd) < len(rois) else 0)
+            'corrections_applied': corrections_count
         })
 
     except Exception as e:
