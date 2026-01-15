@@ -902,6 +902,69 @@ def get_admin_activity():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/admin/storage/debug', methods=['GET'])
+def debug_storage():
+    """Debug endpoint to see raw R2 bucket contents (admin only)"""
+    try:
+        requester_email = request.args.get('requester_email')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        from storage import get_storage
+        storage = get_storage()
+
+        # Try listing with empty prefix to see ALL files
+        debug_info = {
+            'bucket_name': storage.bucket_name,
+            'endpoint_url': storage.endpoint_url,
+            'prefixes_tried': []
+        }
+
+        # List with empty prefix
+        try:
+            response = storage.client.list_objects_v2(
+                Bucket=storage.bucket_name,
+                Prefix='',
+                MaxKeys=100  # Limit for debugging
+            )
+            debug_info['empty_prefix'] = {
+                'key_count': response.get('KeyCount', 0),
+                'is_truncated': response.get('IsTruncated', False),
+                'contents': [obj['Key'] for obj in response.get('Contents', [])][:20],  # First 20
+                'has_contents': 'Contents' in response
+            }
+        except Exception as e:
+            debug_info['empty_prefix'] = {'error': str(e)}
+
+        # Try specific prefixes
+        test_prefixes = ['', 'jobs/', 'diamond-verification/', 'diamond-verification/jobs/']
+        for prefix in test_prefixes:
+            try:
+                response = storage.client.list_objects_v2(
+                    Bucket=storage.bucket_name,
+                    Prefix=prefix,
+                    MaxKeys=10
+                )
+                debug_info['prefixes_tried'].append({
+                    'prefix': prefix or '(empty)',
+                    'key_count': response.get('KeyCount', 0),
+                    'first_keys': [obj['Key'] for obj in response.get('Contents', [])][:5]
+                })
+            except Exception as e:
+                debug_info['prefixes_tried'].append({
+                    'prefix': prefix or '(empty)',
+                    'error': str(e)
+                })
+
+        return jsonify(debug_info)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
 @app.route('/admin/storage', methods=['GET'])
 def get_admin_storage():
     """Get R2 storage information including orphaned files (admin only)"""
@@ -927,12 +990,38 @@ def get_admin_storage():
                 'r2_not_configured': True
             })
 
-        # Get all files from R2 - check both old and new prefixes
+        # Get all files from R2 - try empty prefix first to get everything
         all_files = []
-        storage_prefixes = ['jobs/', 'diamond-verification/jobs/']
-        for prefix in storage_prefixes:
-            files = storage.list_files(prefix=prefix)
-            all_files.extend(files)
+
+        # Use direct API call to see what's in the bucket
+        try:
+            response = storage.client.list_objects_v2(
+                Bucket=storage.bucket_name,
+                Prefix='',
+                MaxKeys=1000
+            )
+            if 'Contents' in response:
+                all_files = [obj['Key'] for obj in response['Contents']]
+                # Handle pagination if needed
+                while response.get('IsTruncated'):
+                    response = storage.client.list_objects_v2(
+                        Bucket=storage.bucket_name,
+                        Prefix='',
+                        MaxKeys=1000,
+                        ContinuationToken=response['NextContinuationToken']
+                    )
+                    if 'Contents' in response:
+                        all_files.extend([obj['Key'] for obj in response['Contents']])
+        except Exception as e:
+            print(f"Error listing R2 files: {e}")
+            return jsonify({
+                'error': f'Failed to list R2 files: {str(e)}',
+                'total_files': 0,
+                'orphaned_files': 0,
+                'total_jobs_in_storage': 0,
+                'orphaned_jobs': 0,
+                'jobs': []
+            })
 
         # Get all job IDs from database
         session = get_session()
