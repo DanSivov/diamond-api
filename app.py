@@ -8,6 +8,7 @@ import base64
 from pathlib import Path
 import sys
 import gc
+import requests
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -445,6 +446,165 @@ def verify_roi(roi_id):
 
     except Exception as e:
         print(f"Error verifying ROI: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/images/<image_id>/regenerate-graded', methods=['POST'])
+def regenerate_graded_image(image_id):
+    """
+    Regenerate graded image with human corrections applied.
+
+    This endpoint is called after all ROIs in an image have been verified.
+    It regenerates the visualization using the corrected orientations.
+
+    Returns:
+        Base64 encoded PNG of the corrected graded image
+    """
+    try:
+        from storage import get_storage
+        from grading import PickupGrader
+        from dataclasses import dataclass
+
+        session = get_session()
+
+        # Get image record
+        image = session.query(Image).filter_by(id=image_id).first()
+        if not image:
+            session.close()
+            return jsonify({'error': 'Image not found'}), 404
+
+        # Get all ROIs with their verifications
+        rois = session.query(ROI).filter_by(image_id=image_id).order_by(ROI.roi_index).all()
+
+        if not rois:
+            session.close()
+            return jsonify({'error': 'No ROIs found for image'}), 404
+
+        # Determine final orientation for each ROI (applying human corrections)
+        roi_data = []
+        for roi in rois:
+            verifications = session.query(Verification).filter_by(roi_id=roi.id).all()
+
+            # Default to predicted orientation
+            final_orientation = roi.predicted_orientation
+
+            if verifications:
+                latest = max(verifications, key=lambda v: v.verified_at)
+                if not latest.is_correct and latest.corrected_orientation:
+                    final_orientation = latest.corrected_orientation
+                elif not latest.is_correct:
+                    # If marked wrong but no correction specified, flip it
+                    final_orientation = 'tilted' if roi.predicted_orientation == 'table' else 'table'
+
+            roi_data.append({
+                'roi_index': roi.roi_index,
+                'bounding_box': roi.bounding_box,
+                'center': roi.center,
+                'area': roi.area,
+                'final_orientation': final_orientation,
+                'predicted_type': roi.predicted_type
+            })
+
+        session.close()
+
+        # Download original image from R2
+        storage = get_storage()
+
+        # Extract R2 key from URL
+        original_url = image.original_url
+        if not original_url:
+            return jsonify({'error': 'Original image URL not found'}), 404
+
+        # Download image via HTTP (simpler than extracting R2 key)
+        print(f"Downloading original image from: {original_url}")
+        response = requests.get(original_url, timeout=30)
+        if response.status_code != 200:
+            return jsonify({'error': f'Failed to download original image: {response.status_code}'}), 500
+
+        # Decode image
+        image_array = np.frombuffer(response.content, np.uint8)
+        original_image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+
+        if original_image is None:
+            return jsonify({'error': 'Failed to decode original image'}), 500
+
+        h, w = original_image.shape[:2]
+        print(f"Original image size: {w}x{h}")
+
+        # Create mock GradedDiamond objects for visualization
+        @dataclass
+        class MockROI:
+            contour: np.ndarray
+            bounding_box: tuple
+            center: tuple
+            area: float
+            detected_type: str
+            orientation: str
+            id: int
+
+        @dataclass
+        class MockGradedDiamond:
+            roi: MockROI
+            grade: float  # None=tilted, -1=too close, 0-10=pickable
+            nearest_distance: float
+            radius: float
+
+        graded_diamonds = []
+        for idx, rd in enumerate(roi_data):
+            # Create contour from bounding box (rectangle)
+            x, y, bw, bh = rd['bounding_box']
+            contour = np.array([
+                [[x, y]], [[x + bw, y]], [[x + bw, y + bh]], [[x, y + bh]]
+            ], dtype=np.int32)
+
+            # Calculate radius from area
+            radius = np.sqrt(rd['area'] / np.pi)
+
+            mock_roi = MockROI(
+                contour=contour,
+                bounding_box=tuple(rd['bounding_box']),
+                center=tuple(rd['center']),
+                area=rd['area'],
+                detected_type=rd['predicted_type'],
+                orientation=rd['final_orientation'],
+                id=idx
+            )
+
+            # Determine grade based on final orientation
+            # For simplicity, tilted diamonds get None, table diamonds get grade 5
+            # (The actual proximity check would need more data)
+            if rd['final_orientation'] == 'tilted':
+                grade = None  # Will show as red
+            else:
+                grade = 5.0  # Will show as green (simplified - real logic would check proximity)
+
+            graded_diamonds.append(MockGradedDiamond(
+                roi=mock_roi,
+                grade=grade,
+                nearest_distance=100.0,  # Dummy value
+                radius=radius
+            ))
+
+        # Create grader and generate visualization
+        grader = PickupGrader(check_orientation=True, image_width_px=w)
+        corrected_vis = grader.visualize_pickup_order(original_image, graded_diamonds)
+
+        # Encode to base64
+        _, buffer = cv2.imencode('.png', corrected_vis)
+        corrected_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        print(f"Generated corrected visualization for image {image_id}")
+
+        return jsonify({
+            'image_id': image_id,
+            'corrected_graded_base64': corrected_b64,
+            'roi_count': len(roi_data),
+            'corrections_applied': sum(1 for rd in roi_data if rd['final_orientation'] != rois[roi_data.index(rd)].predicted_orientation if roi_data.index(rd) < len(rois) else 0)
+        })
+
+    except Exception as e:
+        print(f"Error regenerating graded image: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/jobs/<job_id>/export', methods=['GET'])
