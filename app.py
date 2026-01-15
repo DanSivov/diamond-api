@@ -33,6 +33,13 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
+# Admin configuration
+ADMIN_EMAIL = 'sivovolenkodaniil@gmail.com'
+
+def is_admin(email):
+    """Check if the given email is an admin"""
+    return email and email.lower() == ADMIN_EMAIL.lower()
+
 # Lazy loading to reduce memory footprint
 classifier = None
 
@@ -712,16 +719,199 @@ def list_jobs():
         traceback.print_exc()  # Print full stack trace to logs
         return jsonify({'error': str(e)}), 500
 
+# ============================================================================
+# Admin Endpoints
+# ============================================================================
+
+@app.route('/admin/users', methods=['GET'])
+def list_admin_users():
+    """List all unique users who have created jobs (admin only)"""
+    try:
+        requester_email = request.args.get('requester_email')
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        session = get_session()
+
+        from sqlalchemy import func
+
+        # Get unique user emails with job counts and aggregate stats
+        users_query = session.query(
+            Job.user_email,
+            func.count(Job.id).label('job_count'),
+            func.sum(Job.total_rois).label('total_rois'),
+            func.sum(Job.verified_rois).label('verified_rois'),
+            func.max(Job.created_at).label('last_activity')
+        ).filter(
+            Job.user_email.isnot(None)
+        ).group_by(Job.user_email).all()
+
+        users = []
+        for user in users_query:
+            users.append({
+                'email': user.user_email,
+                'job_count': user.job_count,
+                'total_rois': user.total_rois or 0,
+                'verified_rois': user.verified_rois or 0,
+                'last_activity': user.last_activity.isoformat() if user.last_activity else None
+            })
+
+        session.close()
+
+        return jsonify({'users': users})
+
+    except Exception as e:
+        print(f"Error listing admin users: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/jobs', methods=['GET'])
+def list_admin_jobs():
+    """List all jobs for admin panel with last verification timestamp"""
+    try:
+        requester_email = request.args.get('requester_email')
+        user_filter = request.args.get('user_email')  # Optional: filter by specific user
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        session = get_session()
+
+        from sqlalchemy import func
+
+        query = session.query(Job)
+
+        if user_filter:
+            query = query.filter(Job.user_email == user_filter)
+
+        jobs = query.order_by(Job.created_at.desc()).limit(100).all()
+
+        result = []
+        for job in jobs:
+            job_dict = job.to_dict()
+
+            # Get last verification timestamp for this job
+            last_verification = session.query(func.max(Verification.verified_at))\
+                .join(ROI, Verification.roi_id == ROI.id)\
+                .join(Image, ROI.image_id == Image.id)\
+                .filter(Image.job_id == job.id)\
+                .scalar()
+
+            job_dict['last_verification_at'] = last_verification.isoformat() if last_verification else None
+            result.append(job_dict)
+
+        session.close()
+
+        return jsonify({'jobs': result})
+
+    except Exception as e:
+        print(f"Error listing admin jobs: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/activity', methods=['GET'])
+def get_admin_activity():
+    """Get recent activity history for admin panel"""
+    try:
+        requester_email = request.args.get('requester_email')
+        limit = request.args.get('limit', 50, type=int)
+
+        if not is_admin(requester_email):
+            return jsonify({'error': 'Unauthorized - admin access required'}), 403
+
+        session = get_session()
+
+        # Get recent verifications with job context
+        verifications = session.query(
+            Verification,
+            ROI,
+            Image,
+            Job
+        ).join(
+            ROI, Verification.roi_id == ROI.id
+        ).join(
+            Image, ROI.image_id == Image.id
+        ).join(
+            Job, Image.job_id == Job.id
+        ).order_by(
+            Verification.verified_at.desc()
+        ).limit(limit).all()
+
+        activity = []
+        for v, roi, image, job in verifications:
+            activity.append({
+                'type': 'verification',
+                'timestamp': v.verified_at.isoformat(),
+                'user_email': v.user_email,
+                'job_id': str(job.id),
+                'job_owner': job.user_email,
+                'image_filename': image.filename,
+                'roi_index': roi.roi_index,
+                'is_correct': v.is_correct,
+                'corrected_orientation': v.corrected_orientation
+            })
+
+        # Also get recent job creations
+        recent_jobs = session.query(Job).order_by(Job.created_at.desc()).limit(limit).all()
+        for job in recent_jobs:
+            activity.append({
+                'type': 'job_created',
+                'timestamp': job.created_at.isoformat(),
+                'user_email': job.user_email,
+                'job_id': str(job.id),
+                'total_images': job.total_images
+            })
+
+        # Sort combined activity by timestamp
+        activity.sort(key=lambda x: x['timestamp'], reverse=True)
+
+        session.close()
+
+        return jsonify({'activity': activity[:limit]})
+
+    except Exception as e:
+        print(f"Error getting admin activity: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/jobs/<job_id>', methods=['DELETE'])
 def delete_job(job_id):
-    """Delete a job and all associated data"""
+    """Delete a job and all associated data including R2 files"""
     try:
+        requester_email = request.args.get('requester_email')
+
         session = get_session()
         job = session.query(Job).filter_by(id=job_id).first()
 
         if not job:
             session.close()
             return jsonify({'error': 'Job not found'}), 404
+
+        # Authorization check: must be job owner OR admin
+        if job.user_email != requester_email and not is_admin(requester_email):
+            session.close()
+            return jsonify({'error': 'Unauthorized - not job owner or admin'}), 403
+
+        # Delete R2 files first
+        r2_deleted_count = 0
+        try:
+            from storage import get_storage
+            storage = get_storage()
+            r2_prefix = f"jobs/{job_id}/"
+            files_to_delete = storage.list_files(prefix=r2_prefix)
+
+            for file_key in files_to_delete:
+                if storage.delete_image(file_key):
+                    r2_deleted_count += 1
+
+            print(f"Deleted {r2_deleted_count}/{len(files_to_delete)} R2 files for job {job_id}")
+        except Exception as r2_error:
+            print(f"Warning: Failed to delete R2 files for job {job_id}: {r2_error}")
+            # Continue with DB deletion even if R2 fails
 
         # Get all images for this job
         images = session.query(Image).filter_by(job_id=job_id).all()
@@ -742,9 +932,13 @@ def delete_job(job_id):
         session.commit()
         session.close()
 
-        print(f"Deleted job {job_id}")
+        print(f"Deleted job {job_id} (requested by {requester_email})")
 
-        return jsonify({'success': True, 'message': 'Job deleted successfully'})
+        return jsonify({
+            'success': True,
+            'message': 'Job deleted successfully',
+            'r2_files_deleted': r2_deleted_count
+        })
 
     except Exception as e:
         print(f"Error deleting job: {e}")
