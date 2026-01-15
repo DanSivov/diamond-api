@@ -1172,10 +1172,11 @@ def delete_orphaned_storage():
 
 @app.route('/admin/storage/all', methods=['DELETE'])
 def delete_all_storage():
-    """Delete ALL R2 storage files - admin only (nuclear option)"""
+    """Delete ALL R2 storage files and optionally all database records - admin only (nuclear option)"""
     try:
         requester_email = request.args.get('requester_email')
         confirm = request.args.get('confirm')
+        clear_database = request.args.get('clear_database', 'false').lower() == 'true'
 
         if not is_admin(requester_email):
             return jsonify({'error': 'Unauthorized - admin access required'}), 403
@@ -1205,10 +1206,31 @@ def delete_all_storage():
 
         print(f"CLEARED ALL STORAGE: Deleted {deleted_count} files (failed: {failed_count})")
 
+        # Optionally clear all database records
+        db_deleted = {'jobs': 0, 'images': 0, 'rois': 0, 'verifications': 0}
+        if clear_database:
+            session = get_session()
+            try:
+                # Delete in order due to foreign key constraints
+                db_deleted['verifications'] = session.query(Verification).delete()
+                db_deleted['rois'] = session.query(ROI).delete()
+                db_deleted['images'] = session.query(Image).delete()
+                db_deleted['jobs'] = session.query(Job).delete()
+                session.commit()
+                print(f"CLEARED DATABASE: {db_deleted}")
+            except Exception as e:
+                session.rollback()
+                print(f"Error clearing database: {e}")
+                raise
+            finally:
+                session.close()
+
         return jsonify({
             'success': True,
             'deleted_count': deleted_count,
-            'failed_count': failed_count
+            'failed_count': failed_count,
+            'database_cleared': clear_database,
+            'db_deleted': db_deleted
         })
 
     except Exception as e:
