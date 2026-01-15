@@ -932,6 +932,9 @@ def debug_storage():
         # Also list ALL env vars that start with R2_ for debugging
         r2_all_vars = {k: safe_show(v) for k, v in os.environ.items() if k.upper().startswith('R2')}
 
+        # List ALL env var names (not values) to see what Railway is injecting
+        all_env_var_names = sorted(os.environ.keys())
+
         # Try to get storage
         try:
             from storage import get_storage
@@ -942,6 +945,7 @@ def debug_storage():
                 'message': str(e),
                 'env_vars_set': r2_vars,
                 'all_r2_env_vars': r2_all_vars,
+                'all_env_var_names': all_env_var_names,
                 'r2_not_configured': True
             })
 
