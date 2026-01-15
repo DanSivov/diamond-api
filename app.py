@@ -911,13 +911,32 @@ def debug_storage():
         if not is_admin(requester_email):
             return jsonify({'error': 'Unauthorized - admin access required'}), 403
 
-        from storage import get_storage
-        storage = get_storage()
+        # Check which env vars are set
+        r2_vars = {
+            'R2_ACCOUNT_ID': bool(os.environ.get('R2_ACCOUNT_ID')),
+            'R2_ACCESS_KEY_ID': bool(os.environ.get('R2_ACCESS_KEY_ID')),
+            'R2_SECRET_ACCESS_KEY': bool(os.environ.get('R2_SECRET_ACCESS_KEY')),
+            'R2_BUCKET_NAME': bool(os.environ.get('R2_BUCKET_NAME')),
+            'R2_PUBLIC_URL': bool(os.environ.get('R2_PUBLIC_URL'))
+        }
+
+        # Try to get storage
+        try:
+            from storage import get_storage
+            storage = get_storage()
+        except ValueError as e:
+            return jsonify({
+                'error': 'R2 storage not configured',
+                'message': str(e),
+                'env_vars_set': r2_vars,
+                'r2_not_configured': True
+            })
 
         # Try listing with empty prefix to see ALL files
         debug_info = {
             'bucket_name': storage.bucket_name,
             'endpoint_url': storage.endpoint_url,
+            'env_vars_set': r2_vars,
             'prefixes_tried': []
         }
 
