@@ -112,8 +112,10 @@ def process_batch_job(self, job_id, image_files_data):
                             padding = 10  # Same padding used in detector
                             contour_local = gd.roi.contour - np.array([x - padding, y - padding])
 
-                            # Draw green outline (2px thick)
-                            cv2.drawContours(roi_img, [contour_local], -1, (0, 255, 0), 2)
+                            # Color based on orientation: green=table, red=tilted
+                            orientation = classification.orientation
+                            contour_color = (0, 255, 0) if orientation == 'table' else (0, 0, 255)
+                            cv2.drawContours(roi_img, [contour_local], -1, contour_color, 2)
 
                         roi_filename = f"jobs/{job_id}/rois/{image_record.id}_{roi_idx}.png"
                         roi_url = storage.upload_numpy_image(roi_img, roi_filename)

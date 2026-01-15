@@ -116,15 +116,28 @@ class PickupGrader:
         """
         Get safety threshold for a diamond based on plate width and min distance
 
-        Always uses fixed min_distance_mm threshold (default 2mm) converted to pixels.
-        This is the same for ALL diamond types (round, emerald, other).
+        If mm-to-pixel conversion is available (image_width_px provided):
+            - Use fixed min_distance_mm threshold (default 2mm)
+        Otherwise (fallback):
+            - For circular diamonds: threshold = radius
+            - For non-circular diamonds: threshold = radius/3
         """
-        # Always use fixed threshold - no fallback to radius-based logic
+        # If we have mm-to-pixel conversion, use fixed threshold
         if self.min_distance_px is not None:
             return self.min_distance_px
 
-        # If no image width provided, raise an error
-        raise ValueError("image_width_px is required for grading. Cannot calculate safety threshold without it.")
+        # Fallback to radius-based thresholds
+        radius = np.sqrt(roi.area / np.pi)
+
+        # Check if this is a circular diamond based on detected type
+        is_circular = False
+        if hasattr(roi, 'detected_type') and hasattr(roi, 'orientation'):
+            is_circular = (roi.detected_type == 'round' and roi.orientation == 'table')
+
+        if is_circular:
+            return radius  # Use full radius for circular diamonds
+        else:
+            return radius / 3  # Use diameter/6 = radius/3 for non-circular diamonds
 
     def _find_nearest_edge_distance(self, target_roi, all_rois: List) -> Tuple[float, float]:
         """
@@ -162,10 +175,8 @@ class PickupGrader:
                 # Use the smaller threshold between target and neighbor
                 required_threshold = min(target_threshold, other_threshold)
 
-        # If no neighbors found, return very large distance (diamond is completely isolated)
-        if min_edge_distance == float('inf'):
-            return (float('inf'), required_threshold)
-        return (min_edge_distance, required_threshold)
+        return (min_edge_distance if min_edge_distance != float('inf') else 0.0,
+                required_threshold)
 
     def _find_nearest_neighbor_distance(self, target_roi, all_rois: List) -> float:
         """
@@ -287,13 +298,12 @@ class PickupGrader:
     def visualize_pickup_order(self, image: np.ndarray, graded_diamonds: List[GradedDiamond],
                               save_path: Optional[str] = None) -> np.ndarray:
         """
-        Visualize pickup ranking (simplified view for operators)
+        Visualize pickup status (simplified view for operators)
 
-        Shows pickup order (1, 2, 3...) for TABLE diamonds only
-        Simplified color coding:
-        - Green with numbers: Pickable TABLE diamonds (in pickup order)
-        - Red with X: TABLE diamonds too close to neighbors
-        - No marking: TILTED diamonds (not shown)
+        Simplified color coding (no priority numbers displayed, saved to JSON only):
+        - Green: Pickable diamonds (on table, passes proximity check)
+        - Orange: On table but too close to neighbors (fails proximity check)
+        - Red: Tilted/not on table (not pickable)
 
         Args:
             image: Input image
@@ -305,14 +315,42 @@ class PickupGrader:
         """
         vis_image = image.copy()
 
-        # Create pickup order (sorted by priority, high to low)
+        # Draw TILTED diamonds (grade is None) - RED
+        tilted_diamonds = [gd for gd in graded_diamonds if gd.grade is None]
+        for gd in tilted_diamonds:
+            color = (0, 0, 255)  # Red for tilted/not on table
+            cx, cy = int(gd.roi.center[0]), int(gd.roi.center[1])
+            radius = np.sqrt(gd.roi.area / np.pi)
+
+            # Check if this is a round diamond
+            is_round = (hasattr(gd.roi, 'detected_type') and gd.roi.detected_type == 'round')
+
+            if is_round:
+                cv2.circle(vis_image, (cx, cy), int(radius), color, 2)
+            else:
+                cv2.drawContours(vis_image, [gd.roi.contour], -1, color, 2)
+
+        # Draw TABLE diamonds that are too close (grade == -1) - ORANGE
+        proximity_failed = [gd for gd in graded_diamonds if gd.grade == -1]
+        for gd in proximity_failed:
+            color = (0, 165, 255)  # Orange for proximity failed
+            cx, cy = int(gd.roi.center[0]), int(gd.roi.center[1])
+
+            # Check if this is a circular diamond based on detected type
+            is_circular = (hasattr(gd.roi, 'detected_type') and
+                          gd.roi.detected_type == 'round' and
+                          hasattr(gd.roi, 'orientation') and
+                          gd.roi.orientation == 'table')
+
+            if is_circular:
+                cv2.circle(vis_image, (cx, cy), int(gd.radius), color, 2)
+            else:
+                cv2.drawContours(vis_image, [gd.roi.contour], -1, color, 2)
+
+        # Draw PICKABLE diamonds (grade >= 0) - GREEN
         pickable = [gd for gd in graded_diamonds if gd.grade is not None and gd.grade >= 0]
-        pickup_order = sorted(pickable, key=lambda x: x.grade, reverse=True)
-
-        # Draw valid diamonds with pickup rankings - ALL GREEN
-        for rank, gd in enumerate(pickup_order, 1):
-            color = (0, 255, 0)  # Green for all pickable diamonds
-
+        for gd in pickable:
+            color = (0, 255, 0)  # Green for pickable
             cx, cy = int(gd.roi.center[0]), int(gd.roi.center[1])
 
             # Check if this is a circular diamond based on detected type
@@ -322,55 +360,22 @@ class PickupGrader:
                           gd.roi.orientation == 'table')
 
             if is_circular:
-                # Draw circular outline
                 cv2.circle(vis_image, (cx, cy), int(gd.radius), color, 2)
             else:
-                # Draw contour outline for non-circular diamonds
                 cv2.drawContours(vis_image, [gd.roi.contour], -1, color, 2)
-
-            # Draw pickup ranking number (white outline + colored text)
-            rank_text = str(rank)
-            cv2.putText(vis_image, rank_text, (cx - 8, cy + 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(vis_image, rank_text, (cx - 8, cy + 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
-
-        # Draw TABLE diamonds that are too close (red with X)
-        # NOTE: TILTED diamonds (grade is None) are NOT marked - only show TABLE diamonds
-        invalid_table_diamonds = [gd for gd in graded_diamonds if gd.grade == -1]
-        for gd in invalid_table_diamonds:
-            color = (0, 0, 255)  # Red for not pickable
-            cx, cy = int(gd.roi.center[0]), int(gd.roi.center[1])
-
-            # Check if this is a circular diamond based on detected type
-            is_circular = (hasattr(gd.roi, 'detected_type') and
-                          gd.roi.detected_type == 'round' and
-                          hasattr(gd.roi, 'orientation') and
-                          gd.roi.orientation == 'table')
-
-            if is_circular:
-                # Draw circular outline
-                cv2.circle(vis_image, (cx, cy), int(gd.radius), color, 2)
-            else:
-                # Draw contour outline
-                cv2.drawContours(vis_image, [gd.roi.contour], -1, color, 2)
-
-            # Draw X marker for not pickable diamonds
-            marker_size = int(gd.radius * 0.5)
-            cv2.line(vis_image, (cx - marker_size, cy - marker_size),
-                    (cx + marker_size, cy + marker_size), color, 3)
-            cv2.line(vis_image, (cx - marker_size, cy + marker_size),
-                    (cx + marker_size, cy - marker_size), color, 3)
 
         # Add simplified legend
         legend_y = 30
-        cv2.putText(vis_image, "Pickup Order:", (10, legend_y),
+        cv2.putText(vis_image, "Diamond Status:", (10, legend_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         legend_y += 30
         cv2.putText(vis_image, "Green: Pickable", (10, legend_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         legend_y += 25
-        cv2.putText(vis_image, "Red: Too Close", (10, legend_y),
+        cv2.putText(vis_image, "Orange: Too Close", (10, legend_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+        legend_y += 25
+        cv2.putText(vis_image, "Red: Tilted", (10, legend_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         if save_path:

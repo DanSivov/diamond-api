@@ -13,7 +13,24 @@ import gc
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 app = Flask(__name__)
-CORS(app)
+
+# Configure CORS to allow all origins with proper headers
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": False
+    }
+})
+
+# Add CORS headers to all error responses
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
 
 # Lazy loading to reduce memory footprint
 classifier = None
@@ -215,6 +232,7 @@ except Exception as e:
 @app.route('/jobs/create', methods=['POST'])
 def create_job():
     """Create a new batch processing job"""
+    session = None
     try:
         data = request.get_json()
 
@@ -241,11 +259,28 @@ def create_job():
 
         job_id = job.id
         session.close()
+        session = None
 
-        # Queue async task
-        process_batch_job.delay(job_id, files_data)
-
-        print(f"Created job {job_id} with {len(files_data)} images")
+        # Queue async task with retry handling for Redis connection issues
+        try:
+            process_batch_job.delay(job_id, files_data)
+            print(f"Created job {job_id} with {len(files_data)} images")
+        except Exception as redis_error:
+            print(f"Warning: Failed to queue task (Redis may be unavailable): {redis_error}")
+            # Update job status to indicate queue failure
+            session = get_session()
+            job = session.query(Job).filter_by(id=job_id).first()
+            if job:
+                job.status = 'queue_failed'
+                job.error_message = f"Task queue unavailable: {str(redis_error)}"
+                session.commit()
+            session.close()
+            return jsonify({
+                'job_id': job_id,
+                'status': 'queue_failed',
+                'error': 'Task queue temporarily unavailable. Please try again in a few moments.',
+                'total_images': len(files_data)
+            }), 503
 
         return jsonify({
             'job_id': job_id,
