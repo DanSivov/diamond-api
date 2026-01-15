@@ -911,14 +911,26 @@ def debug_storage():
         if not is_admin(requester_email):
             return jsonify({'error': 'Unauthorized - admin access required'}), 403
 
-        # Check which env vars are set
+        # Check which env vars are set - show actual values for debugging
+        def safe_show(val):
+            if val is None:
+                return "None"
+            if val == "":
+                return "Empty string"
+            if len(val) > 8:
+                return f"'{val[:3]}...{val[-3:]}' (len={len(val)})"
+            return f"'{val}' (len={len(val)})"
+
         r2_vars = {
-            'R2_ACCOUNT_ID': bool(os.environ.get('R2_ACCOUNT_ID')),
-            'R2_ACCESS_KEY_ID': bool(os.environ.get('R2_ACCESS_KEY_ID')),
-            'R2_SECRET_ACCESS_KEY': bool(os.environ.get('R2_SECRET_ACCESS_KEY')),
-            'R2_BUCKET_NAME': bool(os.environ.get('R2_BUCKET_NAME')),
-            'R2_PUBLIC_URL': bool(os.environ.get('R2_PUBLIC_URL'))
+            'R2_ACCOUNT_ID': safe_show(os.environ.get('R2_ACCOUNT_ID')),
+            'R2_ACCESS_KEY_ID': safe_show(os.environ.get('R2_ACCESS_KEY_ID')),
+            'R2_SECRET_ACCESS_KEY': safe_show(os.environ.get('R2_SECRET_ACCESS_KEY')),
+            'R2_BUCKET_NAME': safe_show(os.environ.get('R2_BUCKET_NAME')),
+            'R2_PUBLIC_URL': safe_show(os.environ.get('R2_PUBLIC_URL'))
         }
+
+        # Also list ALL env vars that start with R2_ for debugging
+        r2_all_vars = {k: safe_show(v) for k, v in os.environ.items() if k.upper().startswith('R2')}
 
         # Try to get storage
         try:
@@ -929,6 +941,7 @@ def debug_storage():
                 'error': 'R2 storage not configured',
                 'message': str(e),
                 'env_vars_set': r2_vars,
+                'all_r2_env_vars': r2_all_vars,
                 'r2_not_configured': True
             })
 
