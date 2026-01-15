@@ -927,8 +927,12 @@ def get_admin_storage():
                 'r2_not_configured': True
             })
 
-        # Get all files from R2
-        all_files = storage.list_files(prefix='jobs/')
+        # Get all files from R2 - check both old and new prefixes
+        all_files = []
+        storage_prefixes = ['jobs/', 'diamond-verification/jobs/']
+        for prefix in storage_prefixes:
+            files = storage.list_files(prefix=prefix)
+            all_files.extend(files)
 
         # Get all job IDs from database
         session = get_session()
@@ -942,16 +946,23 @@ def get_admin_storage():
 
         for file_key in all_files:
             total_files += 1
-            # Extract job ID from path: jobs/{job_id}/...
+            # Extract job ID from path: jobs/{job_id}/... or diamond-verification/jobs/{job_id}/...
             parts = file_key.split('/')
-            if len(parts) >= 2:
-                job_id = parts[1]
+            # Find the index after 'jobs' in the path
+            try:
+                jobs_idx = parts.index('jobs')
+                job_id = parts[jobs_idx + 1] if len(parts) > jobs_idx + 1 else None
+            except ValueError:
+                job_id = None
+
+            if job_id:
                 if job_id not in jobs_storage:
                     jobs_storage[job_id] = {
                         'job_id': job_id,
                         'files': [],
                         'file_count': 0,
-                        'is_orphaned': job_id not in db_job_ids
+                        'is_orphaned': job_id not in db_job_ids,
+                        'prefix': file_key.rsplit(job_id, 1)[0]  # Store the prefix for deletion
                     }
                 jobs_storage[job_id]['files'].append(file_key)
                 jobs_storage[job_id]['file_count'] += 1
@@ -989,8 +1000,12 @@ def delete_orphaned_storage():
         from storage import get_storage
         storage = get_storage()
 
-        # Get all files from R2
-        all_files = storage.list_files(prefix='jobs/')
+        # Get all files from R2 - check both old and new prefixes
+        all_files = []
+        storage_prefixes = ['jobs/', 'diamond-verification/jobs/']
+        for prefix in storage_prefixes:
+            files = storage.list_files(prefix=prefix)
+            all_files.extend(files)
 
         # Get all job IDs from database
         session = get_session()
@@ -1003,13 +1018,18 @@ def delete_orphaned_storage():
 
         for file_key in all_files:
             parts = file_key.split('/')
-            if len(parts) >= 2:
-                job_id = parts[1]
-                if job_id not in db_job_ids:
-                    if storage.delete_image(file_key):
-                        deleted_count += 1
-                    else:
-                        failed_count += 1
+            # Find the index after 'jobs' in the path
+            try:
+                jobs_idx = parts.index('jobs')
+                job_id = parts[jobs_idx + 1] if len(parts) > jobs_idx + 1 else None
+            except ValueError:
+                job_id = None
+
+            if job_id and job_id not in db_job_ids:
+                if storage.delete_image(file_key):
+                    deleted_count += 1
+                else:
+                    failed_count += 1
 
         print(f"Deleted {deleted_count} orphaned files (failed: {failed_count})")
 
@@ -1041,8 +1061,12 @@ def delete_all_storage():
         from storage import get_storage
         storage = get_storage()
 
-        # Get all files from R2
-        all_files = storage.list_files(prefix='jobs/')
+        # Get all files from R2 - check both old and new prefixes
+        all_files = []
+        storage_prefixes = ['jobs/', 'diamond-verification/jobs/']
+        for prefix in storage_prefixes:
+            files = storage.list_files(prefix=prefix)
+            all_files.extend(files)
 
         # Delete all files
         deleted_count = 0
@@ -1080,15 +1104,18 @@ def delete_job_storage(job_id):
         from storage import get_storage
         storage = get_storage()
 
-        # Get all files for this job
-        prefix = f"jobs/{job_id}/"
-        files = storage.list_files(prefix=prefix)
+        # Get all files for this job - check both old and new prefixes
+        all_files = []
+        job_prefixes = [f"jobs/{job_id}/", f"diamond-verification/jobs/{job_id}/"]
+        for prefix in job_prefixes:
+            files = storage.list_files(prefix=prefix)
+            all_files.extend(files)
 
         # Delete all files
         deleted_count = 0
         failed_count = 0
 
-        for file_key in files:
+        for file_key in all_files:
             if storage.delete_image(file_key):
                 deleted_count += 1
             else:
@@ -1127,13 +1154,17 @@ def delete_job(job_id):
             session.close()
             return jsonify({'error': 'Unauthorized - not job owner or admin'}), 403
 
-        # Delete R2 files first
+        # Delete R2 files first - check both old and new prefixes
         r2_deleted_count = 0
         try:
             from storage import get_storage
             storage = get_storage()
-            r2_prefix = f"jobs/{job_id}/"
-            files_to_delete = storage.list_files(prefix=r2_prefix)
+
+            files_to_delete = []
+            job_prefixes = [f"jobs/{job_id}/", f"diamond-verification/jobs/{job_id}/"]
+            for r2_prefix in job_prefixes:
+                files = storage.list_files(prefix=r2_prefix)
+                files_to_delete.extend(files)
 
             for file_key in files_to_delete:
                 if storage.delete_image(file_key):
