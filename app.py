@@ -68,6 +68,30 @@ def get_classifier():
 def health():
     return jsonify({'status': 'ok'})
 
+@app.route('/admin/debug-env', methods=['GET'])
+def debug_env():
+    """Debug endpoint to check R2 environment variables (admin only)"""
+    requester_email = request.args.get('requester_email')
+
+    if not is_admin(requester_email):
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    r2_vars = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET_NAME', 'R2_PUBLIC_URL']
+
+    result = {}
+    for var in r2_vars:
+        value = os.environ.get(var)
+        if value:
+            # Show first 4 and last 4 chars only for security
+            if len(value) > 10:
+                result[var] = f"{value[:4]}...{value[-4:]} (len={len(value)})"
+            else:
+                result[var] = f"SET (len={len(value)})"
+        else:
+            result[var] = "NOT SET"
+
+    return jsonify(result)
+
 @app.route('/classify', methods=['POST'])
 def classify():
     if 'image' not in request.files:
@@ -887,8 +911,21 @@ def get_admin_storage():
         if not is_admin(requester_email):
             return jsonify({'error': 'Unauthorized - admin access required'}), 403
 
-        from storage import get_storage
-        storage = get_storage()
+        # Try to get storage - may fail if R2 not configured
+        try:
+            from storage import get_storage
+            storage = get_storage()
+        except ValueError as e:
+            return jsonify({
+                'error': 'R2 storage not configured',
+                'message': str(e),
+                'total_files': 0,
+                'orphaned_files': 0,
+                'total_jobs_in_storage': 0,
+                'orphaned_jobs': 0,
+                'jobs': [],
+                'r2_not_configured': True
+            })
 
         # Get all files from R2
         all_files = storage.list_files(prefix='jobs/')
