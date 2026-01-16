@@ -14,16 +14,27 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
+def sanitize_email_for_path(email):
+    """Convert email to a safe folder name"""
+    if not email:
+        return 'anonymous'
+    # Replace @ and . with underscores, lowercase
+    return email.lower().replace('@', '_at_').replace('.', '_')
+
 @celery_app.task(bind=True)
-def process_batch_job(self, job_id, image_files_data):
+def process_batch_job(self, job_id, image_files_data, user_email=None):
     """
     Process a batch of images asynchronously
 
     Args:
         job_id: UUID of the job
         image_files_data: List of dicts with 'filename' and 'data' (base64 or bytes)
+        user_email: Email of the user who created the job (for folder organization)
     """
     from core import DiamondClassifier
+
+    # Create sanitized folder name from email
+    user_folder = sanitize_email_for_path(user_email)
 
     session = get_session()
     storage = get_storage()
@@ -70,15 +81,15 @@ def process_batch_job(self, job_id, image_files_data):
                 # Classify image
                 result = classifier.classify_image(image, filename)
 
-                # Upload original image to R2
-                original_filename = f"jobs/{job_id}/originals/{filename}"
+                # Upload original image to R2 (organized by user email)
+                original_filename = f"jobs/{user_folder}/{job_id}/originals/{filename}"
                 original_url = storage.upload_numpy_image(image, original_filename)
 
                 # Upload graded visualization to R2
                 graded_url = None
                 visualization = classifier.get_visualization()
                 if visualization is not None:
-                    graded_filename = f"jobs/{job_id}/graded/{filename}_graded.png"
+                    graded_filename = f"jobs/{user_folder}/{job_id}/graded/{filename}_graded.png"
                     graded_url = storage.upload_numpy_image(visualization, graded_filename)
 
                 # Create image record
@@ -117,7 +128,7 @@ def process_batch_job(self, job_id, image_files_data):
                             contour_color = (0, 255, 0) if orientation == 'table' else (0, 0, 255)
                             cv2.drawContours(roi_img, [contour_local], -1, contour_color, 2)
 
-                        roi_filename = f"jobs/{job_id}/rois/{image_record.id}_{roi_idx}.png"
+                        roi_filename = f"jobs/{user_folder}/{job_id}/rois/{image_record.id}_{roi_idx}.png"
                         roi_url = storage.upload_numpy_image(roi_img, roi_filename)
 
                     # Store contour in features for later visualization

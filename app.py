@@ -40,6 +40,12 @@ def is_admin(email):
     """Check if the given email is an admin"""
     return email and email.lower() == ADMIN_EMAIL.lower()
 
+def sanitize_email_for_path(email):
+    """Convert email to a safe folder name for R2 storage"""
+    if not email:
+        return 'anonymous'
+    return email.lower().replace('@', '_at_').replace('.', '_')
+
 # Lazy loading to reduce memory footprint
 classifier = None
 
@@ -295,8 +301,8 @@ def create_job():
 
         # Queue async task with retry handling for Redis connection issues
         try:
-            process_batch_job.delay(job_id, files_data)
-            print(f"Created job {job_id} with {len(files_data)} images")
+            process_batch_job.delay(job_id, files_data, user_email)
+            print(f"Created job {job_id} with {len(files_data)} images for user {user_email}")
         except Exception as redis_error:
             print(f"Warning: Failed to queue task (Redis may be unavailable): {redis_error}")
             # Update job status to indicate queue failure
@@ -1063,29 +1069,47 @@ def get_admin_storage():
         session.close()
 
         # Group files by job ID and identify orphaned ones
+        # New path structure: jobs/{user_folder}/{job_id}/...
+        # Old path structure: jobs/{job_id}/...
         jobs_storage = {}
+        users_storage = {}  # Track files by user folder
         total_files = 0
         orphaned_files = 0
 
         for file_key in all_files:
             total_files += 1
-            # Extract job ID from path: jobs/{job_id}/... or diamond-verification/jobs/{job_id}/...
+            # Extract job ID from path
             parts = file_key.split('/')
-            # Find the index after 'jobs' in the path
+            job_id = None
+            user_folder = None
+
             try:
                 jobs_idx = parts.index('jobs')
-                job_id = parts[jobs_idx + 1] if len(parts) > jobs_idx + 1 else None
+                # Check if this is new structure (jobs/{user}/{job_id}) or old (jobs/{job_id})
+                if len(parts) > jobs_idx + 2:
+                    potential_user = parts[jobs_idx + 1]
+                    potential_job = parts[jobs_idx + 2]
+                    # If the potential_user contains '_at_', it's the new structure
+                    if '_at_' in potential_user:
+                        user_folder = potential_user
+                        job_id = potential_job
+                    else:
+                        # Old structure
+                        job_id = potential_user
+                elif len(parts) > jobs_idx + 1:
+                    job_id = parts[jobs_idx + 1]
             except ValueError:
-                job_id = None
+                pass
 
             if job_id:
                 if job_id not in jobs_storage:
                     jobs_storage[job_id] = {
                         'job_id': job_id,
+                        'user_folder': user_folder,
                         'files': [],
                         'file_count': 0,
                         'is_orphaned': job_id not in db_job_ids,
-                        'prefix': file_key.rsplit(job_id, 1)[0]  # Store the prefix for deletion
+                        'prefix': file_key.rsplit(job_id, 1)[0]
                     }
                 jobs_storage[job_id]['files'].append(file_key)
                 jobs_storage[job_id]['file_count'] += 1
@@ -1093,16 +1117,31 @@ def get_admin_storage():
                 if job_id not in db_job_ids:
                     orphaned_files += 1
 
+                # Track by user
+                if user_folder:
+                    if user_folder not in users_storage:
+                        users_storage[user_folder] = {'file_count': 0, 'job_ids': set()}
+                    users_storage[user_folder]['file_count'] += 1
+                    users_storage[user_folder]['job_ids'].add(job_id)
+
         # Convert to list and sort
         storage_list = list(jobs_storage.values())
         storage_list.sort(key=lambda x: (not x['is_orphaned'], x['job_id']))
+
+        # Convert users_storage sets to lists for JSON
+        users_list = [
+            {'user_folder': k, 'file_count': v['file_count'], 'job_count': len(v['job_ids'])}
+            for k, v in users_storage.items()
+        ]
+        users_list.sort(key=lambda x: x['user_folder'])
 
         return jsonify({
             'total_files': total_files,
             'orphaned_files': orphaned_files,
             'total_jobs_in_storage': len(jobs_storage),
             'orphaned_jobs': sum(1 for j in storage_list if j['is_orphaned']),
-            'jobs': storage_list
+            'jobs': storage_list,
+            'users': users_list
         })
 
     except Exception as e:
@@ -1141,12 +1180,22 @@ def delete_orphaned_storage():
 
         for file_key in all_files:
             parts = file_key.split('/')
-            # Find the index after 'jobs' in the path
+            job_id = None
+
+            # Handle both old (jobs/{job_id}) and new (jobs/{user}/{job_id}) structures
             try:
                 jobs_idx = parts.index('jobs')
-                job_id = parts[jobs_idx + 1] if len(parts) > jobs_idx + 1 else None
+                if len(parts) > jobs_idx + 2:
+                    potential_user = parts[jobs_idx + 1]
+                    potential_job = parts[jobs_idx + 2]
+                    if '_at_' in potential_user:
+                        job_id = potential_job
+                    else:
+                        job_id = potential_user
+                elif len(parts) > jobs_idx + 1:
+                    job_id = parts[jobs_idx + 1]
             except ValueError:
-                job_id = None
+                pass
 
             if job_id and job_id not in db_job_ids:
                 if storage.delete_image(file_key):
@@ -1249,9 +1298,17 @@ def delete_job_storage(job_id):
         from storage import get_storage
         storage = get_storage()
 
-        # Get all files for this job - check both old and new prefixes
+        # Look up job to get user_email for path
+        session = get_session()
+        job = session.query(Job).filter_by(id=job_id).first()
+        user_folder = sanitize_email_for_path(job.user_email) if job else None
+        session.close()
+
+        # Get all files for this job - check old and new path structures
         all_files = []
-        job_prefixes = [f"jobs/{job_id}/", f"diamond-verification/jobs/{job_id}/"]
+        job_prefixes = [f"jobs/{job_id}/"]  # Old structure
+        if user_folder:
+            job_prefixes.append(f"jobs/{user_folder}/{job_id}/")  # New structure
         for prefix in job_prefixes:
             files = storage.list_files(prefix=prefix)
             all_files.extend(files)
@@ -1299,14 +1356,17 @@ def delete_job(job_id):
             session.close()
             return jsonify({'error': 'Unauthorized - not job owner or admin'}), 403
 
-        # Delete R2 files first - check both old and new prefixes
+        # Delete R2 files first - check old and new path structures
         r2_deleted_count = 0
         try:
             from storage import get_storage
             storage = get_storage()
 
+            # Build path prefixes based on job's user_email
+            user_folder = sanitize_email_for_path(job.user_email)
             files_to_delete = []
-            job_prefixes = [f"jobs/{job_id}/", f"diamond-verification/jobs/{job_id}/"]
+            job_prefixes = [f"jobs/{job_id}/"]  # Old structure
+            job_prefixes.append(f"jobs/{user_folder}/{job_id}/")  # New structure
             for r2_prefix in job_prefixes:
                 files = storage.list_files(prefix=r2_prefix)
                 files_to_delete.extend(files)
