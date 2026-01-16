@@ -35,8 +35,7 @@ def add_cors_headers(response):
 
 # Admin configuration
 ADMIN_EMAIL = 'sivovolenkodaniil@gmail.com'
-# CHANGE PASSWORD HERE: Set ADMIN_PASSWORD environment variable in Railway, or change the default below
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '1234')  # Default: 1234 (change in production!)
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')  # Set in Railway environment variables
 
 def is_admin(email):
     """Check if the given email is an admin"""
@@ -316,6 +315,10 @@ def admin_login():
 
         if not password:
             return jsonify({'error': 'Password required'}), 400
+
+        # Check if admin password is configured
+        if not ADMIN_PASSWORD:
+            return jsonify({'error': 'Admin login not configured'}), 500
 
         # Check if email is admin
         if not is_admin(email):
