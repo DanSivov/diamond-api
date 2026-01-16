@@ -803,6 +803,7 @@ def list_admin_users():
         user_data = {u.email: {
             'email': u.email,
             'job_count': 0,
+            'processed_images': 0,
             'total_rois': 0,
             'verified_rois': 0,
             'last_activity': u.last_login.isoformat() if u.last_login else None,
@@ -814,6 +815,7 @@ def list_admin_users():
         users_query = session.query(
             Job.user_email,
             func.count(Job.id).label('job_count'),
+            func.sum(Job.processed_images).label('processed_images'),
             func.sum(Job.total_rois).label('total_rois'),
             func.sum(Job.verified_rois).label('verified_rois'),
             func.max(Job.created_at).label('last_job_activity')
@@ -825,6 +827,7 @@ def list_admin_users():
         for user in users_query:
             if user.user_email in user_data:
                 user_data[user.user_email]['job_count'] = user.job_count
+                user_data[user.user_email]['processed_images'] = user.processed_images or 0
                 user_data[user.user_email]['total_rois'] = user.total_rois or 0
                 user_data[user.user_email]['verified_rois'] = user.verified_rois or 0
                 # Use the more recent activity
@@ -838,6 +841,7 @@ def list_admin_users():
                 user_data[user.user_email] = {
                     'email': user.user_email,
                     'job_count': user.job_count,
+                    'processed_images': user.processed_images or 0,
                     'total_rois': user.total_rois or 0,
                     'verified_rois': user.verified_rois or 0,
                     'last_activity': user.last_job_activity.isoformat() if user.last_job_activity else None,
