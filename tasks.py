@@ -120,6 +120,21 @@ def process_batch_job(self, job_id, image_files_data):
                         roi_filename = f"jobs/{job_id}/rois/{image_record.id}_{roi_idx}.png"
                         roi_url = storage.upload_numpy_image(roi_img, roi_filename)
 
+                    # Store contour in features for later visualization
+                    try:
+                        features = dict(classification.features) if classification.features else {}
+                    except:
+                        features = {}
+
+                    try:
+                        if hasattr(classifier, '_last_graded_diamonds') and roi_idx < len(classifier._last_graded_diamonds):
+                            gd = classifier._last_graded_diamonds[roi_idx]
+                            if hasattr(gd.roi, 'contour') and gd.roi.contour is not None:
+                                # Store contour as list of points for JSON serialization
+                                features['contour'] = gd.roi.contour.tolist()
+                    except Exception as e:
+                        print(f"Warning: Could not store contour for ROI {roi_idx}: {e}")
+
                     # Create ROI record
                     roi_record = ROI(
                         image_id=image_record.id,
@@ -131,7 +146,7 @@ def process_batch_job(self, job_id, image_files_data):
                         bounding_box=list(classification.bounding_box),
                         center=list(classification.center),
                         area=classification.area,
-                        features=classification.features
+                        features=features
                     )
                     session.add(roi_record)
 
