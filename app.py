@@ -256,7 +256,7 @@ def classify_batch():
 # Async Job Management Endpoints
 # ============================================================================
 
-from models import get_session, init_db, Job, Image, ROI, Verification
+from models import get_session, init_db, Job, Image, ROI, Verification, User
 from tasks import process_batch_job
 from datetime import datetime
 
@@ -266,6 +266,40 @@ try:
     print("Database initialized")
 except Exception as e:
     print(f"Database initialization warning: {e}")
+
+@app.route('/auth/login', methods=['POST'])
+def track_login():
+    """Track user login for admin panel visibility"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+
+        if not email:
+            return jsonify({'error': 'Email required'}), 400
+
+        session = get_session()
+
+        # Check if user exists
+        user = session.query(User).filter_by(email=email).first()
+
+        if user:
+            # Update existing user
+            user.last_login = datetime.utcnow()
+            user.login_count += 1
+        else:
+            # Create new user
+            user = User(email=email)
+            session.add(user)
+
+        session.commit()
+        result = user.to_dict()
+        session.close()
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"Error tracking login: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/jobs/create', methods=['POST'])
 def create_job():
@@ -753,7 +787,7 @@ def list_jobs():
 
 @app.route('/admin/users', methods=['GET'])
 def list_admin_users():
-    """List all unique users who have created jobs (admin only)"""
+    """List all users including those without jobs (admin only)"""
     try:
         requester_email = request.args.get('requester_email')
 
@@ -764,27 +798,54 @@ def list_admin_users():
 
         from sqlalchemy import func
 
-        # Get unique user emails with job counts and aggregate stats
+        # Get all registered users from User table
+        all_users = session.query(User).all()
+        user_data = {u.email: {
+            'email': u.email,
+            'job_count': 0,
+            'total_rois': 0,
+            'verified_rois': 0,
+            'last_activity': u.last_login.isoformat() if u.last_login else None,
+            'first_login': u.first_login.isoformat() if u.first_login else None,
+            'login_count': u.login_count
+        } for u in all_users}
+
+        # Get job stats for users who have jobs
         users_query = session.query(
             Job.user_email,
             func.count(Job.id).label('job_count'),
             func.sum(Job.total_rois).label('total_rois'),
             func.sum(Job.verified_rois).label('verified_rois'),
-            func.max(Job.created_at).label('last_activity')
+            func.max(Job.created_at).label('last_job_activity')
         ).filter(
             Job.user_email.isnot(None)
         ).group_by(Job.user_email).all()
 
-        users = []
+        # Merge job stats into user data
         for user in users_query:
-            users.append({
-                'email': user.user_email,
-                'job_count': user.job_count,
-                'total_rois': user.total_rois or 0,
-                'verified_rois': user.verified_rois or 0,
-                'last_activity': user.last_activity.isoformat() if user.last_activity else None
-            })
+            if user.user_email in user_data:
+                user_data[user.user_email]['job_count'] = user.job_count
+                user_data[user.user_email]['total_rois'] = user.total_rois or 0
+                user_data[user.user_email]['verified_rois'] = user.verified_rois or 0
+                # Use the more recent activity
+                if user.last_job_activity:
+                    job_activity = user.last_job_activity.isoformat()
+                    current_activity = user_data[user.user_email]['last_activity']
+                    if not current_activity or job_activity > current_activity:
+                        user_data[user.user_email]['last_activity'] = job_activity
+            else:
+                # User has jobs but wasn't in User table (old data)
+                user_data[user.user_email] = {
+                    'email': user.user_email,
+                    'job_count': user.job_count,
+                    'total_rois': user.total_rois or 0,
+                    'verified_rois': user.verified_rois or 0,
+                    'last_activity': user.last_job_activity.isoformat() if user.last_job_activity else None,
+                    'first_login': None,
+                    'login_count': 0
+                }
 
+        users = list(user_data.values())
         session.close()
 
         return jsonify({'users': users})

@@ -10,6 +10,23 @@ import os
 
 Base = declarative_base()
 
+class User(Base):
+    """Track user logins"""
+    __tablename__ = 'users'
+
+    email = Column(String(255), primary_key=True)
+    first_login = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=False, default=datetime.utcnow)
+    login_count = Column(Integer, nullable=False, default=1)
+
+    def to_dict(self):
+        return {
+            'email': self.email,
+            'first_login': self.first_login.isoformat() if self.first_login else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'login_count': self.login_count
+        }
+
 def get_db_engine():
     """Get database engine from environment"""
     database_url = os.environ.get('DATABASE_URL')
