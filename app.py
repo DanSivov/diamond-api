@@ -425,6 +425,7 @@ def verify_roi(roi_id):
             existing.is_correct = data['is_correct']
             existing.corrected_type = data.get('corrected_type')
             existing.corrected_orientation = data.get('corrected_orientation')
+            existing.is_sam_failure = data.get('is_sam_failure', False)
             existing.notes = data.get('notes')
             existing.verified_at = datetime.utcnow()
             verification = existing
@@ -436,6 +437,7 @@ def verify_roi(roi_id):
                 is_correct=data['is_correct'],
                 corrected_type=data.get('corrected_type'),
                 corrected_orientation=data.get('corrected_orientation'),
+                is_sam_failure=data.get('is_sam_failure', False),
                 notes=data.get('notes')
             )
             session.add(verification)
@@ -512,22 +514,35 @@ def regenerate_graded_image(image_id):
 
         # Determine final orientation for each ROI (applying human corrections)
         roi_data = []
+        sam_failure_ids = set()  # Track ROIs marked as SAM failures
+
         for roi in rois:
             verifications = session.query(Verification).filter_by(roi_id=roi.id).all()
 
             # Default to predicted orientation
             final_orientation = roi.predicted_orientation
+            is_sam_failure = False
 
             if verifications:
                 latest = max(verifications, key=lambda v: v.verified_at)
-                if not latest.is_correct and latest.corrected_orientation:
+
+                # Check if marked as SAM failure
+                if latest.is_sam_failure:
+                    is_sam_failure = True
+                    sam_failure_ids.add(roi.id)
+                elif not latest.is_correct and latest.corrected_orientation:
                     final_orientation = latest.corrected_orientation
                 elif not latest.is_correct:
                     # If marked wrong but no correction specified, flip it
                     final_orientation = 'tilted' if roi.predicted_orientation == 'table' else 'table'
 
+            # Skip SAM failures - they won't be included in visualization
+            if is_sam_failure:
+                continue
+
             roi_data.append({
                 'roi_index': roi.roi_index,
+                'roi_id': roi.id,
                 'bounding_box': roi.bounding_box,
                 'center': roi.center,
                 'area': roi.area,
@@ -561,7 +576,7 @@ def regenerate_graded_image(image_id):
         h, w = original_image.shape[:2]
         print(f"Original image size: {w}x{h}")
 
-        # Create mock GradedDiamond objects for visualization
+        # Create mock ROI objects for grading
         @dataclass
         class MockROI:
             contour: np.ndarray
@@ -572,23 +587,14 @@ def regenerate_graded_image(image_id):
             orientation: str
             id: int
 
-        @dataclass
-        class MockGradedDiamond:
-            roi: MockROI
-            grade: float  # None=tilted, -1=too close, 0-10=pickable
-            nearest_distance: float
-            radius: float
-
-        graded_diamonds = []
+        # First pass: create all mock ROIs
+        mock_rois = []
         for idx, rd in enumerate(roi_data):
             # Create contour from bounding box (rectangle)
             x, y, bw, bh = rd['bounding_box']
             contour = np.array([
                 [[x, y]], [[x + bw, y]], [[x + bw, y + bh]], [[x, y + bh]]
             ], dtype=np.int32)
-
-            # Calculate radius from area
-            radius = np.sqrt(rd['area'] / np.pi)
 
             mock_roi = MockROI(
                 contour=contour,
@@ -599,43 +605,28 @@ def regenerate_graded_image(image_id):
                 orientation=rd['final_orientation'],
                 id=idx
             )
+            mock_rois.append(mock_roi)
 
-            # Determine grade based on final orientation
-            # For simplicity, tilted diamonds get None, table diamonds get grade 5
-            # (The actual proximity check would need more data)
-            if rd['final_orientation'] == 'tilted':
-                grade = None  # Will show as red
-            else:
-                grade = 5.0  # Will show as green (simplified - real logic would check proximity)
-
-            graded_diamonds.append(MockGradedDiamond(
-                roi=mock_roi,
-                grade=grade,
-                nearest_distance=100.0,  # Dummy value
-                radius=radius
-            ))
-
-        # Create grader and generate visualization
+        # Create grader and use it to grade all ROIs with proper proximity checking
         grader = PickupGrader(check_orientation=True, image_width_px=w)
+
+        # Use the grader's grade_diamonds method for proper proximity calculation
+        graded_diamonds = grader.grade_diamonds(mock_rois)
+
+        # Generate visualization
         corrected_vis = grader.visualize_pickup_order(original_image, graded_diamonds)
 
         # Encode to base64
         _, buffer = cv2.imencode('.png', corrected_vis)
         corrected_b64 = base64.b64encode(buffer).decode('utf-8')
 
-        print(f"Generated corrected visualization for image {image_id}")
-
-        # Count how many corrections were applied
-        corrections_count = 0
-        for i, rd in enumerate(roi_data):
-            if i < len(rois) and rd['final_orientation'] != rois[i].predicted_orientation:
-                corrections_count += 1
+        print(f"Generated corrected visualization for image {image_id}, excluded {len(sam_failure_ids)} SAM failures")
 
         return jsonify({
             'image_id': image_id,
             'corrected_graded_base64': corrected_b64,
             'roi_count': len(roi_data),
-            'corrections_applied': corrections_count
+            'sam_failures_excluded': len(sam_failure_ids)
         })
 
     except Exception as e:

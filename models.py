@@ -148,6 +148,7 @@ class Verification(Base):
     is_correct = Column(Boolean, nullable=False)
     corrected_type = Column(String(20), nullable=True)
     corrected_orientation = Column(String(20), nullable=True)
+    is_sam_failure = Column(Boolean, nullable=False, default=False)  # Contour/SAM segmentation failure
     notes = Column(Text, nullable=True)
     verified_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -162,6 +163,7 @@ class Verification(Base):
             'is_correct': self.is_correct,
             'corrected_type': self.corrected_type,
             'corrected_orientation': self.corrected_orientation,
+            'is_sam_failure': self.is_sam_failure,
             'notes': self.notes,
             'verified_at': self.verified_at.isoformat() if self.verified_at else None
         }
@@ -204,6 +206,38 @@ def init_db():
                     print("✓ Migration completed: user_email column added")
                 else:
                     print("✓ user_email column already exists")
+
+                trans.commit()
+            except Exception as e:
+                trans.rollback()
+                print(f"Migration warning (may be safe to ignore if column exists): {e}")
+    except Exception as e:
+        print(f"Migration check failed: {e}")
+
+    # Run migration: Add is_sam_failure column to verifications table
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                # Check if is_sam_failure column exists
+                result = conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name='verifications' AND column_name='is_sam_failure'
+                """))
+
+                if result.fetchone() is None:
+                    print("Running migration: Adding is_sam_failure column to verifications table...")
+
+                    # Add is_sam_failure column with default false
+                    conn.execute(text("""
+                        ALTER TABLE verifications
+                        ADD COLUMN is_sam_failure BOOLEAN NOT NULL DEFAULT FALSE
+                    """))
+
+                    print("✓ Migration completed: is_sam_failure column added")
+                else:
+                    print("✓ is_sam_failure column already exists")
 
                 trans.commit()
             except Exception as e:
