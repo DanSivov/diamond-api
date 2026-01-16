@@ -547,7 +547,8 @@ def regenerate_graded_image(image_id):
                 'center': roi.center,
                 'area': roi.area,
                 'final_orientation': final_orientation,
-                'predicted_type': roi.predicted_type
+                'predicted_type': roi.predicted_type,
+                'features': roi.features  # Contains contour if available
             })
 
         session.close()
@@ -590,11 +591,17 @@ def regenerate_graded_image(image_id):
         # First pass: create all mock ROIs
         mock_rois = []
         for idx, rd in enumerate(roi_data):
-            # Create contour from bounding box (rectangle)
-            x, y, bw, bh = rd['bounding_box']
-            contour = np.array([
-                [[x, y]], [[x + bw, y]], [[x + bw, y + bh]], [[x, y + bh]]
-            ], dtype=np.int32)
+            # Use stored contour if available, otherwise create from bounding box
+            features = rd.get('features') or {}
+            if 'contour' in features and features['contour']:
+                # Use the actual diamond contour stored during processing
+                contour = np.array(features['contour'], dtype=np.int32)
+            else:
+                # Fallback: create rectangle from bounding box
+                x, y, bw, bh = rd['bounding_box']
+                contour = np.array([
+                    [[x, y]], [[x + bw, y]], [[x + bw, y + bh]], [[x, y + bh]]
+                ], dtype=np.int32)
 
             mock_roi = MockROI(
                 contour=contour,
