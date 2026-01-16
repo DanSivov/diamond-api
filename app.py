@@ -35,6 +35,8 @@ def add_cors_headers(response):
 
 # Admin configuration
 ADMIN_EMAIL = 'sivovolenkodaniil@gmail.com'
+# CHANGE PASSWORD HERE: Set ADMIN_PASSWORD environment variable in Railway, or change the default below
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '1234')  # Default: 1234 (change in production!)
 
 def is_admin(email):
     """Check if the given email is an admin"""
@@ -299,6 +301,54 @@ def track_login():
 
     except Exception as e:
         print(f"Error tracking login: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/auth/admin-login', methods=['POST'])
+def admin_login():
+    """Verify admin credentials"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+
+        if not email:
+            return jsonify({'error': 'Email required'}), 400
+
+        if not password:
+            return jsonify({'error': 'Password required'}), 400
+
+        # Check if email is admin
+        if not is_admin(email):
+            return jsonify({'error': 'Unauthorized - not an admin email', 'is_admin': False}), 403
+
+        # Verify password
+        if password != ADMIN_PASSWORD:
+            return jsonify({'error': 'Invalid password'}), 401
+
+        # Track login
+        session = get_session()
+        user = session.query(User).filter_by(email=email).first()
+
+        if user:
+            user.last_login = datetime.utcnow()
+            user.login_count += 1
+        else:
+            user = User(email=email)
+            session.add(user)
+
+        session.commit()
+        session.close()
+
+        print(f"Admin login successful for {email}")
+
+        return jsonify({
+            'success': True,
+            'is_admin': True,
+            'email': email
+        })
+
+    except Exception as e:
+        print(f"Error in admin login: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/jobs/create', methods=['POST'])
