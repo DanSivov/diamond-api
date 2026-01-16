@@ -766,7 +766,8 @@ def export_job_labels(job_id):
                     'confidence': roi.confidence,
                     'bounding_box': roi.bounding_box,
                     'center': roi.center,
-                    'area': roi.area
+                    'area': roi.area,
+                    'features': roi.features  # Geometric features needed for retraining
                 }
 
                 if verifications:
