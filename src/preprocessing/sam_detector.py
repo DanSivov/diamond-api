@@ -425,25 +425,20 @@ class SAMDiamondDetector:
                 if i == j or j in to_remove:
                     continue
 
+                # Only check if i is smaller than j
                 if roi_i.area >= roi_j.area:
                     continue
 
                 cx_i, cy_i = roi_i.center
                 center_inside = cv2.pointPolygonTest(roi_j.contour, (float(cx_i), float(cy_i)), False) >= 0
 
-                if center_inside:
-                    x_i, y_i, w_i, h_i = roi_i.bounding_box
-                    x_j, y_j, w_j, h_j = roi_j.bounding_box
+                # Check if smaller ROI is significantly smaller (internal reflection)
+                area_ratio = roi_i.area / roi_j.area
 
-                    bbox_contained = (
-                        x_i >= x_j and y_i >= y_j and
-                        (x_i + w_i) <= (x_j + w_j) and
-                        (y_i + h_i) <= (y_j + h_j)
-                    )
-
-                    if bbox_contained:
-                        to_remove.add(i)
-                        break
+                # Remove if center is inside and area is less than 50% of containing ROI
+                if center_inside and area_ratio < 0.5:
+                    to_remove.add(i)
+                    break
 
         filtered_rois = [roi for idx, roi in enumerate(diamond_rois) if idx not in to_remove]
 
