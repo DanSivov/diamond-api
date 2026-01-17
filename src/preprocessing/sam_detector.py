@@ -50,7 +50,7 @@ class SAMDiamondDetector:
                  overlap_threshold: float = 0.25,
                  use_full_sam: bool = False,
                  plate_width_mm: float = 100.0,
-                 min_diamond_size_mm: float = 0.5):
+                 min_diamond_size_mm: float = 2.0):
         """
         Initialize SAM diamond detector
 
@@ -62,7 +62,7 @@ class SAMDiamondDetector:
             overlap_threshold: IoU threshold for merging masks
             use_full_sam: If True, use full SAM model (ViT-H), else use FastSAM
             plate_width_mm: Width of plate in millimeters (default: 100mm)
-            min_diamond_size_mm: Minimum diamond width/height in mm (default: 0.5mm)
+            min_diamond_size_mm: Minimum diamond size in mm (default: 2.0mm, filters by area)
         """
         self.min_area = min_area
         self.max_area = max_area
@@ -372,13 +372,14 @@ class SAMDiamondDetector:
             x, y, w, h = cv2.boundingRect(contour)
 
             # Filter out unrealistically small diamonds based on real-world size
-            # Calculate minimum pixel size from mm (plate_width_mm matches image width)
+            # Calculate minimum area in pixels from mm (plate_width_mm matches image width)
             image_width = image.shape[1]
             px_per_mm = image_width / self.plate_width_mm
-            min_size_px = self.min_diamond_size_mm * px_per_mm
+            min_area_mm2 = self.min_diamond_size_mm * self.min_diamond_size_mm  # e.g., 2mm x 2mm = 4mm²
+            min_area_px = min_area_mm2 * (px_per_mm ** 2)
 
-            if w < min_size_px or h < min_size_px:
-                continue  # Skip diamonds smaller than minimum real-world size
+            if area < min_area_px:
+                continue  # Skip diamonds smaller than minimum real-world area
             x_pad = max(0, x - self.padding)
             y_pad = max(0, y - self.padding)
             x_end = min(image.shape[1], x + w + self.padding)
