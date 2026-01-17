@@ -427,6 +427,215 @@ def create_job():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/jobs/create-chunked', methods=['POST'])
+def create_chunked_job():
+    """Create an empty job for chunked uploads"""
+    session = None
+    try:
+        data = request.get_json()
+
+        total_images = data.get('total_images', 0)
+        user_email = data.get('user_email')
+
+        if total_images <= 0:
+            return jsonify({'error': 'total_images must be greater than 0'}), 400
+
+        session = get_session()
+
+        # Create job record with 'uploading' status
+        job = Job(
+            user_email=user_email,
+            total_images=total_images,
+            processed_images=0,
+            status='uploading'
+        )
+        session.add(job)
+        session.commit()
+
+        job_id = job.id
+        session.close()
+
+        print(f"Created chunked job {job_id} expecting {total_images} images for user {user_email}")
+
+        return jsonify({
+            'job_id': job_id,
+            'status': 'uploading',
+            'total_images': total_images,
+            'processed_images': 0
+        })
+
+    except Exception as e:
+        print(f"Error creating chunked job: {e}")
+        import traceback
+        traceback.print_exc()
+        if session:
+            session.close()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/jobs/<job_id>/add-image', methods=['POST'])
+def add_image_to_job(job_id):
+    """Add and process a single image to an existing job"""
+    from core import DiamondClassifier
+
+    session = None
+    try:
+        data = request.get_json()
+
+        if not data or 'filename' not in data or 'data' not in data:
+            return jsonify({'error': 'Missing filename or data'}), 400
+
+        filename = data['filename']
+        image_data = data['data']
+        user_email = data.get('user_email')
+
+        session = get_session()
+        storage = get_storage()
+
+        # Get job
+        job = session.query(Job).filter_by(id=job_id).first()
+        if not job:
+            session.close()
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Verify user owns this job
+        if job.user_email != user_email:
+            session.close()
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        # Update status to processing if this is first image
+        if job.status == 'uploading':
+            job.status = 'processing'
+            session.commit()
+
+        user_folder = sanitize_email_for_path(user_email)
+
+        # Decode image
+        import base64
+        image_bytes = base64.b64decode(image_data)
+        file_array = np.frombuffer(image_bytes, np.uint8)
+        image = cv2.imdecode(file_array, cv2.IMREAD_COLOR)
+
+        if image is None:
+            return jsonify({'error': f'Failed to decode image: {filename}'}), 400
+
+        # Load classifier
+        model_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'best_model_randomforest.pkl'
+        features_path = Path(__file__).parent / 'models' / 'ml_classifier' / 'feature_names.json'
+        classifier = DiamondClassifier(str(model_path), str(features_path))
+
+        # Classify image
+        print(f"Processing image for job {job_id}: {filename}")
+        result = classifier.classify_image(image, filename)
+
+        # Upload original image to R2
+        original_filename = f"jobs/{user_folder}/{job_id}/originals/{filename}"
+        original_url = storage.upload_numpy_image(image, original_filename)
+
+        # Upload graded visualization to R2
+        graded_url = None
+        visualization = classifier.get_visualization()
+        if visualization is not None:
+            graded_filename = f"jobs/{user_folder}/{job_id}/graded/{filename}_graded.png"
+            graded_url = storage.upload_numpy_image(visualization, graded_filename)
+
+        # Create image record
+        image_record = Image(
+            job_id=job_id,
+            filename=filename,
+            original_url=original_url,
+            graded_url=graded_url,
+            total_diamonds=result.total_diamonds,
+            table_count=result.table_count,
+            tilted_count=result.tilted_count,
+            pickable_count=result.pickable_count,
+            invalid_count=result.invalid_count,
+            average_grade=result.average_grade
+        )
+        session.add(image_record)
+        session.flush()
+
+        # Create ROI records
+        for roi_idx, classification in enumerate(result.classifications):
+            roi_url = None
+            if hasattr(classifier, '_last_graded_diamonds') and roi_idx < len(classifier._last_graded_diamonds):
+                gd = classifier._last_graded_diamonds[roi_idx]
+                roi_img = gd.roi.roi_image.copy()
+
+                if hasattr(gd.roi, 'contour') and gd.roi.contour is not None:
+                    x, y, w, h = gd.roi.bounding_box
+                    padding = 10
+                    contour_local = gd.roi.contour - np.array([x - padding, y - padding])
+                    contour_color = (0, 255, 0) if classification.orientation == 'table' else (0, 0, 255)
+                    cv2.drawContours(roi_img, [contour_local], -1, contour_color, 2)
+
+                roi_filename = f"jobs/{user_folder}/{job_id}/rois/{image_record.id}_{roi_idx}.png"
+                roi_url = storage.upload_numpy_image(roi_img, roi_filename)
+
+            features = dict(classification.features) if classification.features else {}
+
+            if hasattr(classifier, '_last_graded_diamonds') and roi_idx < len(classifier._last_graded_diamonds):
+                gd = classifier._last_graded_diamonds[roi_idx]
+                if hasattr(gd.roi, 'contour') and gd.roi.contour is not None:
+                    features['contour'] = gd.roi.contour.tolist()
+
+            roi_record = ROI(
+                image_id=image_record.id,
+                roi_index=roi_idx,
+                roi_image_url=roi_url,
+                predicted_type=classification.diamond_type,
+                predicted_orientation=classification.orientation,
+                confidence=classification.confidence,
+                bounding_box=list(classification.bounding_box),
+                center=list(classification.center),
+                area=classification.area,
+                features=features
+            )
+            session.add(roi_record)
+
+        # Update job progress
+        job.processed_images += 1
+
+        # Update total ROIs count
+        from sqlalchemy import func
+        total_rois = session.query(func.count(ROI.id)).join(Image).filter(Image.job_id == job_id).scalar()
+        job.total_rois = total_rois or 0
+
+        # Check if all images processed
+        if job.processed_images >= job.total_images:
+            job.status = 'ready'
+            print(f"Job {job_id} complete: {job.processed_images}/{job.total_images} images")
+
+        session.commit()
+
+        response_data = {
+            'success': True,
+            'filename': filename,
+            'processed_images': job.processed_images,
+            'total_images': job.total_images,
+            'status': job.status,
+            'diamonds_found': result.total_diamonds,
+            'total_rois': job.total_rois
+        }
+
+        session.close()
+
+        # Clean up memory
+        del image, visualization, classifier
+        gc.collect()
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        print(f"Error adding image to job {job_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        if session:
+            session.close()
+        gc.collect()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/jobs/<job_id>/status', methods=['GET'])
 def get_job_status(job_id):
     """Get job status and progress"""
