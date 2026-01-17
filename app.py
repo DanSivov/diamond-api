@@ -490,6 +490,7 @@ def add_image_to_job(job_id):
         user_email = data.get('user_email')
 
         session = get_session()
+        from storage import get_storage
         storage = get_storage()
 
         # Get job
