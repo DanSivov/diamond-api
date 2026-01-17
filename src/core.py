@@ -39,8 +39,8 @@ class ImageResult:
     invalid_count: int
     average_grade: float
     classifications: List[ClassificationResult]
-    model_name: str = 'RandomForest'
-    model_accuracy: str = '95.6%'
+    model_name: str = 'StackedRandomForest'
+    model_accuracy: str = '92.5%'
 
     def to_dict(self):
         """Convert to dictionary for JSON export"""
@@ -53,7 +53,10 @@ class DiamondClassifier:
     """
     Core diamond classification engine
 
-    Auto-detects diamond type and classifies orientation using ML
+    Auto-detects diamond type and classifies orientation using ML.
+    Uses a stacked model architecture for improved accuracy (92.5%):
+    - Base model: RandomForest trained on geometric features
+    - Stacked model: Uses base model predictions + extended features
     """
 
     def __init__(self, model_path: str, feature_names_path: str):
@@ -61,16 +64,64 @@ class DiamondClassifier:
         Initialize classifier
 
         Args:
-            model_path: Path to trained ML model (.pkl)
+            model_path: Path to trained ML model (.pkl) - used as base model
             feature_names_path: Path to feature names JSON
         """
-        self.model = joblib.load(model_path)
+        # Load base model (original RandomForest)
+        self.base_model = joblib.load(model_path)
         with open(feature_names_path, 'r') as f:
             self.feature_names = json.load(f)
+
+        # Load stacked model if available (improved accuracy)
+        model_dir = Path(model_path).parent
+        stacked_model_path = model_dir / 'orientation_classifier_improved.pkl'
+        if stacked_model_path.exists():
+            self.stacked_model = joblib.load(stacked_model_path)
+            self.use_stacked_model = True
+            print(f"Loaded stacked model (92.5% accuracy)")
+        else:
+            self.stacked_model = None
+            self.use_stacked_model = False
+            print(f"Stacked model not found, using base model only")
+
+        # For backwards compatibility
+        self.model = self.base_model
 
         self.feature_extractor = PureGeometricClassifier()
         self.detector = None
         self.grader = None
+
+    def _extract_contour_features(self, mask: np.ndarray) -> dict:
+        """
+        Extract circularity and solidity from mask for stacked model
+
+        Args:
+            mask: Binary mask of the diamond
+
+        Returns:
+            Dict with circularity and solidity
+        """
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            return {'circularity': 0.5, 'solidity': 0.5}
+
+        contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(contour)
+        if area < 10:
+            return {'circularity': 0.5, 'solidity': 0.5}
+
+        perimeter = cv2.arcLength(contour, True)
+        circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
+        circularity = min(circularity, 1.0)
+
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        solidity = area / hull_area if hull_area > 0 else 0
+
+        return {
+            'circularity': circularity,
+            'solidity': solidity
+        }
 
     def _initialize_detector(self, image_shape: Tuple[int, int]):
         """Initialize detector with adaptive area thresholds"""
@@ -168,22 +219,66 @@ class DiamondClassifier:
 
             else:
                 # For NON-ROUND diamonds, use ML model trained on rectangular diamonds
-                # Prepare features for ML model
-                features = [
+                # Extract contour features for stacked model
+                contour_features = self._extract_contour_features(roi.mask)
+                circularity = contour_features['circularity']
+                solidity = contour_features['solidity']
+
+                # Base features for original model
+                base_features = [
                     result.outline_symmetry_score,
                     result.reflection_symmetry_score,
                     result.aspect_ratio,
                     result.spot_symmetry_score,
                     1 if result.has_large_central_spot else 0,
                     result.num_reflection_spots,
-                    0,  # is_emerald (removed)
-                    1   # is_other
+                    0,  # type_emerald
+                    1   # type_other
                 ]
 
-                # Predict orientation
-                X = np.array([features])
-                prediction = self.model.predict(X)[0]
-                probability = self.model.predict_proba(X)[0]
+                if self.use_stacked_model and self.stacked_model is not None:
+                    # Get base model prediction probability
+                    X_base = np.array([base_features])
+                    base_prob = self.base_model.predict_proba(X_base)[0][1]  # P(table)
+
+                    # Calculate derived features
+                    outline_sym = result.outline_symmetry_score
+                    reflection_sym = result.reflection_symmetry_score
+                    aspect_ratio = result.aspect_ratio
+                    sym_product = outline_sym * reflection_sym
+                    sym_diff = abs(outline_sym - reflection_sym)
+                    aspect_circ_ratio = aspect_ratio / (circularity + 0.01)
+
+                    # Extended features for stacked model (14 features + base_model_prob)
+                    # Order: outline_sym, reflection_sym, aspect_ratio, spot_sym, has_spot,
+                    #        num_reflections, circularity, image_is_round, type_emerald, type_other,
+                    #        sym_product, sym_diff, aspect_circ_ratio, solidity, base_model_prob
+                    extended_features = [
+                        outline_sym,
+                        reflection_sym,
+                        aspect_ratio,
+                        result.spot_symmetry_score,
+                        1 if result.has_large_central_spot else 0,
+                        result.num_reflection_spots,
+                        circularity,
+                        0,  # image_is_round (not applicable for single ROI)
+                        0,  # type_emerald
+                        1,  # type_other
+                        sym_product,
+                        sym_diff,
+                        aspect_circ_ratio,
+                        solidity,
+                        base_prob  # Base model prediction
+                    ]
+
+                    X_stacked = np.array([extended_features])
+                    prediction = self.stacked_model.predict(X_stacked)[0]
+                    probability = self.stacked_model.predict_proba(X_stacked)[0]
+                else:
+                    # Fallback to base model only
+                    X_base = np.array([base_features])
+                    prediction = self.base_model.predict(X_base)[0]
+                    probability = self.base_model.predict_proba(X_base)[0]
 
                 orientation = 'table' if prediction == 1 else 'tilted'
                 confidence = probability[prediction]
@@ -197,6 +292,13 @@ class DiamondClassifier:
             else:
                 tilted_count += 1
 
+            # Extract circularity for non-round diamonds (for features output)
+            if diamond_type != 'round':
+                cf = self._extract_contour_features(roi.mask)
+                circ = cf['circularity']
+            else:
+                circ = 0.0
+
             # Store classification result
             classifications.append(ClassificationResult(
                 roi_id=roi.id,
@@ -209,7 +311,8 @@ class DiamondClassifier:
                     'aspect_ratio': float(result.aspect_ratio),
                     'spot_sym': float(result.spot_symmetry_score),
                     'has_spot': bool(result.has_large_central_spot),
-                    'num_reflections': int(result.num_reflection_spots)
+                    'num_reflections': int(result.num_reflection_spots),
+                    'circularity': float(circ)
                 },
                 bounding_box=roi.bounding_box,
                 center=roi.center,

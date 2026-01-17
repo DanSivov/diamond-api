@@ -33,8 +33,8 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
-# Admin configuration
-ADMIN_EMAIL = 'sivovolenkodaniil@gmail.com'
+# Admin configuration - read from environment variables
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'sivovolenkodaniil@gmail.com')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')  # Set in Railway environment variables
 
 def is_admin(email):
@@ -74,6 +74,14 @@ def get_classifier():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
+
+@app.route('/check-admin', methods=['GET'])
+def check_admin():
+    """Check if the given email is an admin (without requiring password)"""
+    email = request.args.get('email')
+    if not email:
+        return jsonify({'is_admin': False})
+    return jsonify({'is_admin': is_admin(email)})
 
 @app.route('/admin/debug-env', methods=['GET'])
 def debug_env():
