@@ -16,4 +16,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 1 --max-requests 100 --max-requests-jitter 10
+CMD gunicorn app:app --bind 0.0.0.0:$PORT --timeout 600 --graceful-timeout 300 --keep-alive 120 --workers 1 --max-requests 100 --max-requests-jitter 10
